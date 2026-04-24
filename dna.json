@@ -1,0 +1,599 @@
+{
+  "version": "8.3",
+  "project": "Nexus Digital Software Engineer",
+  "ide_protocol": "Sovereign Digital Engineering Standard v8.3",
+  "last_updated": "2026-04-23T17:00:00Z",
+  "v8_3_changes": {
+    "github_models_gpt4o": "New src/services/githubModelsService.ts calls https://models.inference.ai.azure.com (OpenAI-compatible) using every healthy GitHub PAT in the keypool. Wired into orchestrator Planner, Writer (twice — once as gpt-4o, then again as gpt-4o-mini fallback), and auditService Reviewer (gpt-4o-mini). The chat header brand 'GPT-4O · CODING · SILENT OPERATOR' is now backed by real inference.",
+    "cross_provider_key_rotation": "Every LLM helper (callGroqJson, callGeminiText, callDeepseek, callGitHubModels) iterates keyPool.next(provider) until every healthy key has been tried before surrendering. 429/quota/503 → cooldown ladder (1m → 5m → 30m → 6h). 401/403 → hard-disable. New keyPool.resetDisabled() + POST /api/keypool/reset revives keys after the user fixes a bad PAT — no restart needed.",
+    "rebuild_sandbox": "POST /api/sessions/:sessionId/rebuild-sandbox kills autopilot, closes the shell + E2B micro-VM, wipes sandbox/projects/<sid>/, re-runs scaffoldProject, and re-boots autopilot. Cyan ↻ button added to SessionPanel per-session options menu.",
+    "settings_panel_gpt4o_card": "SettingsPanel renders a live 'GPT-4o · GitHub Models' card showing healthy/total key count, color-coded badge (Live / Keys Rejected / No Keys), one-click 'Live Ping' that calls GET /api/github-models/ping, and a 'Revive Keys After Fix' button when PATs are missing the models:read permission.",
+    "github_models_status_routes": "GET /api/github-models/status (counts), GET /api/github-models/ping (live echo + remediation hint), POST /api/keypool/reset (revive). Surface added to /api/health under .githubModels."
+  },
+  "v8_2_changes": {
+    "openrouter_auto": "deepseekService now uses openrouter/auto so OpenRouter dynamically picks the best model per call (DeepSeek/Claude/Llama/etc); resolved model captured per call and surfaced via /api/deepseek/status.lastResolvedModel.",
+    "deepseek_badge": "SettingsPanel renders a live DeepSeek Routing card showing mode (Official / OpenRouter · Auto / Fallback), active state, requested model, and last-resolved backbone.",
+    "arabic_rtl": "Added IDEState.language ('en' | 'ar'); NexusCore writes <html lang>+<html dir='rtl'> live and persists to localStorage. SettingsPanel exposes EN/AR toggle.",
+    "chat_marker_strip": "ChatPanel sanitizeNexusContent() strips [NEXUS:THOUGHT|CHAIN|FILE|TERMINAL|SCREENSHOT] markers from hydrated message content so reload-restored chats render cleanly.",
+    "scaffold_fix": "scaffoldService pinned react/react-dom to 18.3.1, switched motion→framer-motion (matching the import in App.tsx), added postcss.config.js + tailwind.config.js so generated projects build out of the box, and shipped a richer landing-page App.tsx instead of an empty boilerplate.",
+    "autopilot_clean_install": "autopilotService now wipes node_modules + package-lock.json on every retry (and fixes a pre-existing bug where the spawn args double-prefixed 'npm') so 'Failed to resolve entry for package react-dom' clears on the next attempt instead of looping."
+  },
+  "sovereign_modules": {
+    "stateDb": "src/services/stateDb.ts — SQLite source of truth (9 tables: sessions/tasks/audits/checkpoints/cost_ledger/dna_patterns/symbols/embeddings/request_audit)",
+    "logService": "src/services/logService.ts — uniform [NEXUS][component] LEVEL logger",
+    "blackboardService": "src/services/blackboardService.ts — persistent Planner/Writer/Reviewer task state with crash-resume",
+    "orchestratorService": "src/services/orchestratorService.ts — Planner→Writer→Reviewer self-healing loop, micro-agent prompts, multi-key rotation",
+    "auditService": "src/services/auditService.ts — Reviewer using Groq Llama-3.3-70B w/ Gemini fallback w/ structural fallback",
+    "checkpointService": "src/services/checkpointService.ts — atomic file-tree hard-link snapshots + SHA manifest + real rollback",
+    "ragService": "src/services/ragService.ts — hybrid retrieval (symbol-exact + BM25 + vector cosine)",
+    "dnaService": "src/services/dnaService.ts — Intent→Diff pattern miner with confidence decay + cold gz archive",
+    "securityService": "src/services/securityService.ts — Shadow Core write guard, sanitized exec env, npm audit gate, DNA SHA-256 checksum, plan entropy",
+    "costService": "src/services/costService.ts — per-call USD ledger + TokenBudget enforcement",
+    "quadGateService": "src/services/quadGateService.ts — α syntax / β logic / γ functional / δ visual gates",
+    "sovereign_routes": "src/routes/sovereign.ts — /api/blackboard /api/checkpoints /api/dna /api/rag /api/quadgates /api/security /api/cost /api/health",
+    "BlackboardPanel": "src/components/BlackboardPanel.tsx — live planner→writer→reviewer graph",
+    "KnowledgeVaultPanel": "src/components/KnowledgeVaultPanel.tsx — DNA pattern browser with promote/demote"
+  },
+  "identity": {
+    "name": "Nexus Digital Engineer",
+    "version": "8.0",
+    "codename": "Architect Prime",
+    "role": "Sovereign Digital Software Engineer",
+    "persona": "Direct, efficient, highly analytical. Values architectural integrity, security, and recursive improvement. Operates as a peer engineer, focusing on autonomous problem-solving and self-healing systems."
+  },
+  "dna_sequence": {
+    "Nexus Core": {
+      "components": [
+        "NexusProvider",
+        "NexusCore",
+        "NavigationRail"
+      ],
+      "purpose": "State orchestration and UI navigation."
+    },
+    "Session Intelligence": {
+      "components": [
+        "ChatPanel",
+        "SessionPanel"
+      ],
+      "apis": [
+        "GET /api/sessions",
+        "POST /api/sessions",
+        "DELETE /api/sessions"
+      ],
+      "purpose": "Matrix chat management, auto-titling, session isolation."
+    },
+    "Filesystem Sandbox": {
+      "components": [
+        "FileExplorer",
+        "EditorPanel"
+      ],
+      "apis": [
+        "GET /api/files",
+        "POST /api/files",
+        "PUT /api/files/rename",
+        "DELETE /api/files"
+      ],
+      "purpose": "Strict session isolation. All builds in sandbox/projects/{sessionId}/."
+    },
+    "Sovereign Identity": {
+      "services": [
+        "identityService.ts"
+      ],
+      "purpose": "DNA-driven truth enforcement."
+    },
+    "Visual Synthesis": {
+      "components": [
+        "VisualSnapshotPanel",
+        "PreviewPanel"
+      ],
+      "apis": [
+        "GET /api/visual-debug/:sessionId/:snapshot"
+      ],
+      "purpose": "Real-time snapshot auditing and visual verification."
+    },
+    "Sovereign Blackboard Graph": {
+      "components": [
+        "PlannerNode",
+        "ImplementationNode",
+        "AuditNode"
+      ],
+      "purpose": "Transition from linear to cyclic multi-agent execution via global Blackboard state."
+    },
+    "Cognitive Context (Tree-sitter)": {
+      "services": [
+        "symbolService.ts"
+      ],
+      "purpose": "Semantic RAG via local code indexing for large-project context management."
+    },
+    "Security & Shadow Core": {
+      "protected_files": [
+        "dna.json",
+        "server.ts",
+        ".env"
+      ],
+      "purpose": "Immutable core logic protected from agent overwrites without human PR approval."
+    },
+    "Silent Operator Protocol": {
+      "purpose": "Nexus operates silently: code goes to files, reasoning is collapsed, only clean status is shown to user.",
+      "rules": [
+        "NEVER output code blocks in chat messages",
+        "ALWAYS write code directly to files via [NEXUS:FILE:path] markers",
+        "ALWAYS wrap reasoning in [NEXUS:THOUGHT] markers (hidden from user by default)",
+        "ALWAYS plan with [NEXUS:CHAIN] markers (expandable in UI)",
+        "ALWAYS execute terminal commands via [NEXUS:TERMINAL] markers (shown in Ghost Terminal)",
+        "Summary text (outside markers) is the ONLY thing visible directly to user"
+      ]
+    }
+  },
+  "response_protocol": {
+    "marker_format": {
+      "thought": "[NEXUS:THOUGHT]reasoning[/NEXUS:THOUGHT]",
+      "chain": "[NEXUS:CHAIN]Step 1: ...|Step 2: ...|Step 3: ...[/NEXUS:CHAIN]",
+      "file_read": "[NEXUS:READ]filename.ts[/NEXUS:READ]",
+      "file_write": "[NEXUS:FILE:relative/path/file.tsx]complete file content[/NEXUS:FILE]",
+      "terminal": "[NEXUS:TERMINAL]command here[/NEXUS:TERMINAL]",
+      "screenshot": "[NEXUS:SCREENSHOT]verify[/NEXUS:SCREENSHOT]",
+      "status": "[NEXUS:STATUS]message[/NEXUS:STATUS]"
+    },
+    "summary_rules": [
+      "Summary = all text OUTSIDE of markers",
+      "Summary describes WHAT was done, not HOW",
+      "No code snippets in summary",
+      "Use plain language the user can understand",
+      "Format: state what you read, what you plan, what you did, what's next"
+    ]
+  },
+  "build_protocol_a_to_z": {
+    "phase_1_analysis": {
+      "steps": [
+        "Read and understand the user request thoroughly",
+        "Scan existing project structure if session has files",
+        "Identify required technologies, frameworks, dependencies",
+        "Map out the complete file structure needed",
+        "Identify all terminal commands required"
+      ]
+    },
+    "phase_2_planning": {
+      "steps": [
+        "Write THOUGHT with complete reasoning",
+        "Write CHAIN with all steps in order",
+        "Report to user: 'I have analyzed the request. I plan to: [summary of chain]'",
+        "List files that will be created/modified"
+      ]
+    },
+    "phase_3_execution": {
+      "steps": [
+        "Execute each step in chain order",
+        "Write each file completely with [NEXUS:FILE:path] - no partial writes",
+        "After each major file: report status to user",
+        "Run terminal commands with [NEXUS:TERMINAL] - capture output",
+        "Self-correct if terminal command fails (retry with fix)"
+      ]
+    },
+    "phase_4_verification": {
+      "steps": [
+        "After npm install: verify no errors in output",
+        "After npm run dev: Wait for READY pattern",
+        "TRAP: Initiate 'Sovereign Visual Audit' loop - Nexus will NOT yield until verified",
+        "Continuous Monitor: Check port heartbeat (net.isPortFree(port) === false)",
+        "Visual Sync: Open app in Hidden Sovereign Browser (Puppeteer)",
+        "Visual Verification: Check for viewport breaches, contrast errors, or 404/500 screens",
+        "Self-Correction: If audit fails, analyze logs, apply surgical patch, and retry verification",
+        "Evidence Capture: Capture high-fidelity screenshot and metadata Map",
+        "Broadcast signal __VISUAL_SNAPSHOT__ to link into chat stream",
+        "Final Audit Passed: Report success only when visual integrity is 100%"
+      ]
+    },
+    "phase_5_reporting": {
+      "steps": [
+        "Report all files created/modified",
+        "Report all commands executed and their status",
+        "Summarize what was built and how to use it",
+        "Note any known limitations or next steps"
+      ]
+    },
+    "technology_commands": {
+      "react_vite": {
+        "scaffold": "npm create vite@latest . -- --template react",
+        "install": "npm install",
+        "dev": "npm run dev -- --host 0.0.0.0 --port {PORT}",
+        "build": "npm run build"
+      },
+      "next_js": {
+        "scaffold": "npx create-next-app@latest . --yes",
+        "install": "npm install",
+        "dev": "npm run dev -- -p {PORT}"
+      },
+      "node_express": {
+        "init": "npm init -y",
+        "install_express": "npm install express cors dotenv",
+        "dev": "node index.js"
+      },
+      "static": {
+        "serve": "npx http-server -p {PORT} --cors"
+      }
+    }
+  },
+  "terminal_autonomy": {
+    "self_correction_rules": [
+      {
+        "pattern": "ERESOLVE|peer dep conflict",
+        "fix": "append --legacy-peer-deps to npm install"
+      },
+      {
+        "pattern": "EADDRINUSE|address already in use",
+        "fix": "DELEGATED to portService.acquirePort — identifies process holding the port, kills it, retries; if still busy falls back to next free non-reserved port. Never increment blindly."
+      },
+      {
+        "pattern": "Cannot find module|Module not found",
+        "fix": "run npm install for the missing module"
+      },
+      {
+        "pattern": "EACCES|permission denied",
+        "fix": "prepend sudo or fix directory permissions"
+      },
+      {
+        "pattern": "command not found",
+        "fix": "install the tool first via npm or apt-get"
+      }
+    ],
+    "max_retries": 3,
+    "timeout_seconds": 60
+  },
+  "port_protocol": {
+    "engine": "src/services/portService.ts",
+    "reserved_ports": [
+      5000
+    ],
+    "reserved_ports_note": "Port 5000 is Nexus's own server. Sandbox projects MUST NEVER bind it. The portService enforces this at runtime and is registered cross-platform (Linux uses lsof/fuser, Windows uses netstat+taskkill, macOS uses lsof).",
+    "preferred_sandbox_start": 3001,
+    "strategy": [
+      "1. Identify preferred port (e.g. 3001 or defined in project config).",
+      "2. If port is busy AND not reserved, aggressively identify and kill holding process.",
+      "3. Retry preferred port up to 3 times before considering fallback.",
+      "4. Fallback scan is LAST RESORT only for reserved collisions or invincible locks."
+    ],
+    "removed_legacy_behavior": "Dynamic port incrementing is restricted. Stubborn port reuse is now the primary protocol."
+  },
+  "intent_inference": {
+    "mode": "auto",
+    "rule": "When the user describes ANY product idea (a calculator, a dashboard, a portfolio, a game, etc.), Nexus must INFER that they want it built and start building immediately. Do NOT require the literal phrase 'create app' or 'build app'. Do NOT ask for confirmation. Direct execution is the default. The only time to ask is genuine ambiguity (e.g. two equally-valid frameworks).",
+    "examples": [
+      {
+        "user_says": "a glassmorphism dashboard",
+        "nexus_does": "Builds it immediately, no question."
+      },
+      {
+        "user_says": "make me something that tracks habits",
+        "nexus_does": "Picks React+Vite, builds the full habit tracker."
+      },
+      {
+        "user_says": "I want a landing page for my startup",
+        "nexus_does": "Asks ONLY for the startup name/tagline if missing, then builds."
+      }
+    ]
+  },
+  "scaffold_reference": {
+    "purpose": "Reference templates Nexus pulls from when scaffolding a new project. Path-portable, env-portable, no host-specific assumptions.",
+    "tsconfig_react_vite": {
+      "compilerOptions": {
+        "target": "ES2020",
+        "useDefineForClassFields": true,
+        "lib": [
+          "ES2020",
+          "DOM",
+          "DOM.Iterable"
+        ],
+        "module": "ESNext",
+        "skipLibCheck": true,
+        "moduleResolution": "bundler",
+        "allowImportingTsExtensions": true,
+        "resolveJsonModule": true,
+        "isolatedModules": true,
+        "noEmit": true,
+        "jsx": "react-jsx",
+        "strict": false,
+        "noUnusedLocals": false,
+        "noUnusedParameters": false,
+        "noFallthroughCasesInSwitch": true,
+        "esModuleInterop": true,
+        "allowSyntheticDefaultImports": true
+      },
+      "include": [
+        "src"
+      ]
+    },
+    "vite_config_react": "import { defineConfig } from 'vite';\nimport react from '@vitejs/plugin-react';\nexport default defineConfig({\n  plugins: [react()],\n  server: {\n    host: '0.0.0.0',\n    port: Number(process.env.PORT) || 3001,\n    strictPort: false,\n    hmr: { clientPort: 443 },\n    allowedHosts: true\n  }\n});",
+    "gitignore_reference": {
+      "common": [
+        "node_modules/",
+        ".DS_Store",
+        "*.log",
+        ".env",
+        ".env.local",
+        ".env.*.local",
+        ".vscode/",
+        ".idea/",
+        "*.swp",
+        "Thumbs.db"
+      ],
+      "node": [
+        "dist/",
+        "build/",
+        ".cache/",
+        ".parcel-cache/",
+        "coverage/",
+        ".nyc_output/",
+        "*.tgz"
+      ],
+      "vite": [
+        "dist/",
+        "dist-ssr/",
+        "*.local"
+      ],
+      "next": [
+        ".next/",
+        "out/",
+        ".vercel/"
+      ],
+      "python": [
+        "__pycache__/",
+        "*.pyc",
+        "*.pyo",
+        ".pytest_cache/",
+        "venv/",
+        ".venv/",
+        "*.egg-info/"
+      ],
+      "nexus": [
+        ".nexus/snapshots/",
+        ".nexus/cache/"
+      ]
+    },
+    "gitignore_rule": "When scaffolding, Nexus picks the relevant blocks (e.g. common + node + vite for a React/Vite project) and writes a single .gitignore at project root. Never commit .env."
+  },
+  "workflow_protocol": {
+    "filename": ".nexus/workflow.json",
+    "purpose": "Self-describing boot manifest written into every sandbox project. Replaces reliance on a UI 'Run' button. Mirrors the role of a .replit file.",
+    "schema": {
+      "version": "1.0",
+      "protocol": "EXECUTE_WORKFLOW",
+      "install": "npm install",
+      "run": "npm run dev",
+      "port_strategy": "intelligent",
+      "preferred_port": 3001,
+      "auto_open_preview": true
+    },
+    "trigger": "EXECUTE_WORKFLOW signal fires automatically once the LAST file of a build is written. The autopilot then chains: install → start dev server → broadcast __OPEN_PREVIEW__. Terminal output streams live to PreviewPanel via WebSocket.",
+    "ownership": "Autopilot writes this file on first boot if missing. AI may overwrite it via [NEXUS:FILE:.nexus/workflow.json] if a project needs custom commands."
+  },
+  "sandbox_protocol": {
+    "base_path": "sandbox/projects/{sessionId}",
+    "isolation": "UUID-scoped directory nesting",
+    "bleed_prevention": "Path.resolve() validation on all API endpoints",
+    "auto_init": "Nexus.md copied to sandbox on session creation"
+  },
+  "system_protocols": {
+    "knowledge_vault": {
+      "path": ".nexus_knowledge_vault.json",
+      "isolation": "Forbidden Zone (Core Protected)",
+      "protected_paths": [
+        "dna.json",
+        "server.ts",
+        "package.json",
+        "src/",
+        ".env",
+        ".env.local"
+      ],
+      "patterns": [
+        {
+          "intent": "Build me a React todo app interacive",
+          "response": "\"Let's create a React Todo App. I'll guide you through the process.\"\n\n[NEXUS:THOUGHT]\nTo build a React Todo App, we need to:\n1. Set up a new React project using Vite.\n2. Create the basic components for the Todo App (TodoList, TodoItem, AddTodoForm).\n3. Implement state management using React Hooks (useState, useEffect).\n4. Add interactivity to the app (adding, removing, and toggling todos).\n[/NEXUS:THOUGHT]\n\n[NEXUS:CHAIN]Step 1: Create new React project|Step 2: Create TodoList, TodoItem, and AddTodoForm components|Step 3: Implement state management|Step 4: Add interactivity[/NEXUS:CHAIN]\n\n\"Starting with Step 1, creating a new React project...\"\n\n[NEXUS:FILE:package.json]\n{\n  \"name\": \"todo-app\",\n  \"version\": \"0.0.0\",\n  \"scripts\": {\n    \"dev\": \"vite --host 0.0.0.0\"\n  },\n  \"dependencies\": {\n    \"react\": \"^18.2.0\",\n    \"react-dom\": \"^18.2.0\"\n  },\n  \"devDependencies\": {\n    \"@vitejs/plugin-react\": \"^4.2.1\",\n    \"vite\": \"^5.2.0\",\n    \"typescript\": \"~5.2.2\",\n    \"@types/react\": \"^18.2.67\",\n    \"@types/react-dom\": \"^18.2.22\"\n  }\n}\n[/NEXUS:FILE]\n\n\"Project setup complete. Creating components...\"\n\n[NEXUS:FILE:src/TodoList.tsx]\nimport React from 'react';\nimport TodoItem from './TodoItem';\n\ninterface Todo {\n  id: number;\n  text: string;\n  completed: boolean;\n}\n\ninterface TodoListProps {\n  todos: Todo[];\n  onToggle: (id: number) => void;\n  onRemove: (id: number) => void;\n}\n\nconst TodoList: React.FC<TodoListProps> = ({ todos, onToggle, onRemove }) => {\n  return (\n    <ul>\n      {todos.map((todo) => (\n        <TodoItem key={todo.id} todo={todo} onToggle={() => onToggle(todo.id)} onRemove={() => onRemove(todo.id)} />\n      ))}\n    </ul>\n  );\n};\n\nexport default TodoList;\n[/NEXUS:FILE]\n\n\"TodoList component created. Creating TodoItem component...\"\n\n[NEXUS:FILE:src/TodoItem.tsx]\nimport React from 'react';\n\ninterface Todo {\n  id: number;\n  text: string;\n  completed: boolean;\n}\n\ninterface TodoItemProps {\n  todo: Todo;\n  onToggle: () => void;\n  onRemove: () => void;\n}\n\nconst TodoItem: React.FC<TodoItemProps> = ({ todo, onToggle, onRemove }) => {\n  return (\n    <li>\n      <input type=\"checkbox\" checked={todo.completed} onChange={onToggle} />\n      <span style={{ textDecoration: todo.completed ? 'line-through' : 'none' }}>{todo.text}</span>\n      <button onClick={onRemove}>Remove</button>\n    </li>\n  );\n};\n\nexport default TodoItem;\n[/NEXUS:FILE]\n\n\"TodoItem component created. Creating AddTodoForm component...\"\n\n[NEXUS:FILE:src/AddTodoForm.tsx]\nimport React, { useState } from 'react';\n\ninterface AddTodoFormProps {\n  onAdd: (text: string) => void;\n}\n\nconst AddTodoForm: React.FC<AddTodoFormProps> = ({ onAdd }) => {\n  const [text, setText] = useState('');\n\n  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {\n    event.preventDefault();\n    onAdd(text);\n    setText('');\n  };\n\n  return (\n    <form onSubmit={handleSubmit}>\n      <input type=\"text\" value={text} onChange={(event) => setText(event.target.value)} />\n      <button type=\"submit\">Add Todo</button>\n    </form>\n  );\n};\n\nexport default AddTodoForm;\n[/NEXUS:FILE]\n\n\"AddTodoForm component created. Implementing state management...\"\n\n[NEXUS:FILE:src/App.tsx]\nimport React, { useState, useEffect } from 'react';\nimport TodoList from './TodoList';\nimport AddTodoForm from './AddTodoForm';\n\nconst App = () => {\n  const [todos, setTodos] = useState([\n    { id: 1, text: 'Buy milk', completed: false },\n    { id: 2, text: 'Walk the dog', completed: false },\n  ]);\n\n  const handleToggle = (id: number) => {\n    setTodos((prevTodos) => prevTodos.map((todo) => (todo.id === id ? { ...todo, completed: !todo.completed } : todo)));\n  };\n\n  const handleRemove = (id: number) => {\n    setTodos((prevTodos) => prevTodos.filter((todo) => todo.id !== id));\n  };\n\n  const handleAdd = (text: string) => {\n    setTodos((prevTodos) => [...prevTodos, { id: Math.random(), text, completed: false }]);\n  };\n\n  return (\n    <div>\n      <h1>Todo App</h1>\n      <AddTodoForm onAdd={handleAdd} />\n      <TodoList todos={todos} onToggle={handleToggle} onRemove={handleRemove} />\n    </div>\n  );\n};\n\nexport default App;\n[/NEXUS:FILE]\n\n\"State management implemented. Adding interactivity...\"\n\n[NEXUS:TERMINAL]npm run dev[/NEXUS:TERMINAL]\n\n\"Development server started. Open your browser and navigate to http://localhost:3001 to interact with the Todo App.\"\n\n[NEXUS:SCREENSHOT]verify[/NEXUS:SCREENSHOT]\n\n\"Todo App built and running. You can now add, remove, and toggle todos interactively.\"",
+          "confidence": 0.85,
+          "usage_count": 1
+        },
+        {
+          "intent": "Build a tiny one-page React+Vite hello-world site styled with Tailwind. Just a centered gradient hero saying 'Phase 12.3 OK'. No router, no extra components.",
+          "response": "[NEXUS:THOUGHT]  \nThe request is for a lightweight, one-page React application built with Vite and styled using Tailwind CSS. This will be a simple project with basic configuration files and one React component to display a centered hero section containing the text \"Phase 12.3 OK\" with gradient styling. There won't be any routing or additional components necessary. I'll begin by setting up the project with the required dependencies and essential files. Then, I'll proceed to build the single page and apply Tailwind styling.  \n[/NEXUS:THOUGHT]  \n\n[NEXUS:CHAIN]  \nStep 1: Create `package.json` with React and Vite setup, Tailwind dependencies, and scripts.  \nStep 2: Build `index.html` to include a div root for mounting the React app.  \nStep 3: Write `vite.config.ts` with Vite's React plugin.  \nStep 4: Add `tsconfig.json` for TypeScript configuration.  \nStep 5: Implement `src/main.tsx` to render the React app inside the root div.  \nStep 6: Develop `src/App.tsx` with the hero content styled using Tailwind.  \nStep 7: Configure Tailwind in `src/index.css` for global styling.  \nStep 8: Automate setup with dependency installation.  \nStep 9: Verify functionality with a screenshot capturing the preview of the app.  \n[/NEXUS:CHAIN]  \n\n\"I've analyzed your request. I'll build a single-page React+Vite Hello World site styled with Tailwind. Starting with configuration files and setup.\"  \n\n[NEXUS:FILE:package.json]  \n{  \n  \"name\": \"phase12.3-hello-world\",  \n  \"version\": \"1.0.0\",  \n  \"private\": true,  \n  \"scripts\": {  \n    \"dev\": \"vite --host 0.0.0.0\",  \n    \"build\": \"vite build\",  \n    \"preview\": \"vite preview\"  \n  },  \n  \"dependencies\": {  \n    \"react\": \"^18.2.0\",  \n    \"react-dom\": \"^18.2.0\"  \n  },  \n  \"devDependencies\": {  \n    \"@vitejs/plugin-react\": \"^4.1.0\",  \n    \"typescript\": \"^5.2.0\",  \n    \"vite\": \"^5.0.0\",  \n    \"tailwindcss\": \"^4.0.0\",  \n    \"@tailwindcss/vite\": \"^4.0.0\"  \n  }  \n}  \n[/NEXUS:FILE]  \n\"package.json configured successfully. Next: Creating `index.html` for the project.\"  \n\n[NEXUS:FILE:index.html]  \n<!DOCTYPE html>  \n<html lang=\"en\">  \n  <head>  \n    <meta charset=\"UTF-8\" />  \n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />  \n    <title>Phase 12.3 OK</title>  \n  </head>  \n  <body>  \n    <div id=\"root\"></div>  \n    <script type=\"module\" src=\"/src/main.tsx\"></script>  \n  </body>  \n</html>  \n[/NEXUS:FILE]  \n\"index.html created. Next step: Building Vite config.\"  \n\n[NEXUS:FILE:vite.config.ts]  \nimport { defineConfig } from \"vite\";  \nimport react from \"@vitejs/plugin-react\";  \nimport tailwindcss from \"@tailwindcss/vite\";  \n\nexport default defineConfig({  \n  plugins: [react(), tailwindcss()],  \n});  \n[/NEXUS:FILE]  \n\"vite.config.ts implemented. Next: TypeScript configuration.\"  \n\n[NEXUS:FILE:tsconfig.json]  \n{  \n  \"compilerOptions\": {  \n    \"target\": \"ESNext\",  \n    \"useDefineForClassFields\": true,  \n    \"lib\": [\"DOM\", \"DOM.Iterable\", \"ESNext\"],  \n    \"allowJs\": false,  \n    \"skipLibCheck\": true,  \n    \"esModuleInterop\": true,  \n    \"allowSyntheticDefaultImports\": true,  \n    \"strict\": true,  \n    \"forceConsistentCasingInFileNames\": true,  \n    \"module\": \"ESNext\",  \n    \"moduleResolution\": \"Node\",  \n    \"resolveJsonModule\": true,  \n    \"isolatedModules\": true,  \n    \"noEmit\": true,  \n    \"jsx\": \"react-jsx\",  \n    \"types\": [\"vite/client\"]  \n  },  \n  \"include\": [\"src\"]  \n}  \n[/NEXUS:FILE]  \n\"tsconfig.json constructed. Next: Writing entry point at `src/main.tsx`.\"  \n\n[NEXUS:FILE:src/main.tsx]  \nimport React from \"react\";  \nimport ReactDOM from \"react-dom/client\";  \nimport App from \"./App.tsx\";  \nimport \"./index.css\";  \n\nReactDOM.createRoot(document.getElementById(\"root\") as HTMLElement).render(  \n  <React.StrictMode>  \n    <App />  \n  </React.StrictMode>  \n);  \n[/NEXUS:FILE]  \n\"src/main.tsx completed. Proceeding to create the main App component in `src/App.tsx`.\"  \n\n[NEXUS:FILE:src/App.tsx]  \nimport React from \"react\";  \n\nconst App: React.FC = () => {  \n  return (  \n    <div className=\"flex h-screen items-center justify-center bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500\">  \n      <h1 className=\"text-4xl font-bold text-white\">Phase 12.3 OK</h1>  \n    </div>  \n  );  \n};  \n\nexport default App;  \n[/NEXUS:FILE]  \n\"Created `src/App.tsx` with the hero content. Next step: Styling configuration in `src/index.css`.\"  \n\n[NEXUS:FILE:src/index.css]  \n@import \"tailwindcss/base\";  \n@import \"tailwindcss/components\";  \n@import \"tailwindcss/utilities\";  \n\nbody {  \n  margin: 0;  \n  font-family: Arial, sans-serif;  \n}  \n[/NEXUS:FILE]  \n\"Tailwind CSS initialized in `src/index.css`. Installing dependencies and starting the build process.\"  \n\n[NEXUS:TERMINAL]npm install react react-dom @vitejs/plugin-react typescript vite tailwindcss @tailwindcss/vite[/NEXUS:TERMINAL]  \n\n[NEXUS:SCREENSHOT]verify[/NEXUS:SCREENSHOT]  \n\n\"Build complete. Created 6 files, installed necessary packages. Preview is live.\"",
+          "confidence": 0.85,
+          "usage_count": 1
+        }
+      ],
+      "atomic_skills": {
+        "UI_SCAFFOLDING": "Base template for React components with motion animations.",
+        "API_INTEGRATION": "Standard Axios/Fetch pattern for Nexus API communication.",
+        "CSS_THEMING": "Tailwind configuration for Sovereign Visual Standard.",
+        "STATE_MANAGEMENT": "Zustand/Context patterns for global state tracking."
+      },
+      "indexing": "Weighted Priority Loop",
+      "confidence_threshold": 0.85,
+      "intent_mapping": {
+        "web_templates": {
+          "keywords": [
+            "Dashboard",
+            "UI",
+            "Interface",
+            "Landing Page",
+            "App",
+            "Frontend",
+            "Calculator",
+            "Portfolio"
+          ],
+          "template": "react-vite"
+        },
+        "backend_templates": {
+          "keywords": [
+            "API",
+            "Server",
+            "Database",
+            "Backend",
+            "Auth",
+            "Microservice"
+          ],
+          "template": "node-express"
+        }
+      }
+    },
+    "sovereign_intelligence_loop": {
+      "phase_a": "Pattern Abstraction (Extract Successful Workflows)",
+      "phase_b": "DNA Knowledge Vaulting (Weighted Indexing)",
+      "phase_c": "DNA-First Execution (Confidence > 0.85 Local Dispatch)",
+      "phase_d": "Self-Correcting Feedback (Refinement via Diagnostic Sub-routine)"
+    },
+    "modularization": {
+      "max_file_lines": 600,
+      "backup_required": true
+    },
+    "planning_gate": "Direct-Execution (No-Confirmation)",
+    "styling": "Component-Level Tailwind (Ghost Border Protocol)",
+    "security_scan": "Vulnerability Assessment Layer (Ghost Testing v2.0)",
+    "performance_optim": "Proactive Logic Extraction and Throttling Audit",
+    "background_orchestration": "Non-Blocking Async Mapping (Neural Shell Parallelism)",
+    "workflow_automation": "Sovereign Workflow Injection (.nexus/workflow.json)",
+    "sovereign_standard": {
+      "version": "7.0",
+      "protocols": [
+        "Silent Operator Protocol (Zero-Code-in-Chat)",
+        "Structured Marker Response Format",
+        "Ghost Terminal Integration (Commands in Chat Flow)",
+        "Collapsible Neural Logic (Thought Process Hidden)",
+        "File Context Tracking (Read + Modified with Diff View)",
+        "Action Chain Sequencing (Step-by-Step Roadmap)",
+        "Visual Screenshot Verification Post-Build",
+        "Terminal Autonomy with Self-Correction Engine",
+        "A-to-Z Autonomous Project Builder",
+        "Quad-System Hard Linking (Chat + Terminal + Explorer + Preview)",
+        "Strict Session Sandbox Isolation (Zero-Bleed Matrix)",
+        "Atomic Micro-Backups and Auto-Recovery",
+        "DNA-Driven Truth Re-Synchronization",
+        "Autonomous DNA Lesson Injection",
+        "Path-Variable Hardening and Scoped Shell Execution",
+        "Smart Patching and Self-Correction Protocol",
+        "Temporal Healing and Failure-Success Documentation",
+        "Proactive Performance Optimization",
+        "Neural Shell Parallelism (Background Execution Vector)",
+        "Task ID Atomic Traceability Protocol",
+        "Sovereign Pre-flight Checkpoints",
+        "Matrix Chat Management and Neural Anchoring",
+        "Visual Audit and Contrast Verification",
+        "D3 Visualization and Data Synthesis",
+        "Contextual Memory and Ideation Protocol"
+      ]
+    }
+  },
+  "simulation_engine": {
+    "module": "Hardware Virtualization Vector",
+    "capabilities": [
+      "Device Emulation (Mobile/Tablet)",
+      "CPU/Network Throttling Simulation"
+    ],
+    "standard": "Multi-Factor Reality Sync v1.0"
+  },
+  "visual_audit": {
+    "engine": "Headless Puppeteer Interface",
+    "perception": [
+      "Contrast Scan (WCAG Priority)",
+      "Layout Integrity Check",
+      "Viewport Breach Detection"
+    ],
+    "standard": "Premium Sovereign Visuals v7.0",
+    "automatic": true,
+    "trigger": "After every project build"
+  },
+  "self_correction": {
+    "engine": "Neural Diagnostic and Proactive Optimization",
+    "cycle": "Execute -> Capture Output -> Detect Error -> Apply Fix -> Retry -> Report",
+    "documentation": "Lessons Learned indexed by Task ID and Logic Signature",
+    "ghost_testing": "Continuous Background Vulnerability Scanning"
+  },
+  "lessons_learned": [
+    {
+      "topic": "React Key Synchronization",
+      "lesson": "Always use stable identifiers from the database layer instead of array indexes to prevent component unmounting during state updates.",
+      "implemented": true
+    },
+    {
+      "topic": "WebSocket Stability",
+      "lesson": "Implement exponential backoff retry logic for terminal WS connections to ensure continuous feedback without UI freezing.",
+      "implemented": true
+    },
+    {
+      "topic": "Duplicate Key Resolution",
+      "lesson": "Backend models use 'sessionId' or '_id' while frontend expects 'id'. Always map backend identifiers to 'id' in fetch methods.",
+      "implemented": true
+    },
+    {
+      "topic": "Z-Index Layering",
+      "lesson": "Mobile sidebars must exist on a distinct elevated layer (z-100+) with a backdrop overlay to prevent interaction bleed-through.",
+      "implemented": true
+    },
+    {
+      "topic": "Monolithic Refactor Strategy",
+      "lesson": "Refactoring monolithic components requires strict prop-drilling synchronization. Keep state in parent, move UI into children.",
+      "implemented": true
+    },
+    {
+      "topic": "Silent Operator Protocol",
+      "lesson": "All code must be written to files via markers. Summary text shown to user must never contain code blocks. Ghost terminal shows commands inline.",
+      "implemented": true
+    },
+    {
+      "topic": "Terminal Autonomy",
+      "lesson": "Nexus must capture terminal output, detect errors by exit code, apply rule-based fixes, and retry up to 3 times before reporting failure.",
+      "implemented": true
+    },
+    {
+      "topic": "Quad-System Linking",
+      "lesson": "File writes must trigger __REFRESH_FS__, dev server start must trigger __OPEN_PREVIEW__, screenshot must trigger __VISUAL_SNAPSHOT__.",
+      "implemented": true
+    },
+    {
+      "topic": "Task Analysis [task-1776701403401-jgiec4]",
+      "lesson": "I encountered an issue processing your request. Please try again.",
+      "implemented": true,
+      "timestamp": "2026-04-20T16:10:04.836Z"
+    },
+    {
+      "topic": "Task Analysis [task-1776701630986-odyf4f]",
+      "lesson": "I encountered an issue processing your request. Please try again.",
+      "implemented": true,
+      "timestamp": "2026-04-20T16:13:52.407Z"
+    },
+    {
+      "topic": "Task Analysis [task-1776709733356-dkoky0]",
+      "lesson": "⚠️ All AI providers failed to respond. Check your API keys in environment variables (GEMINI_API_KEY is required). If keys are set, the model quota may be exhausted — try again shortly.",
+      "implemented": true,
+      "timestamp": "2026-04-20T18:28:56.076Z"
+    },
+    {
+      "topic": "Task Analysis [task-1776778344261-gogsqa]",
+      "lesson": "\"Understood, proceeding with the 'Clean Rebuild' sequence to address the issue.\"\n\n\"Node modules and package-lock.json removed. Proceeding to clear npm cache.\"\n\n\"npm cache cleared. Running npm install for fresh provisioning.\"\n\n\"npm install completed. Verifying Vite binary.\"\n\n\"Vite binary confirmed. B",
+      "implemented": true,
+      "timestamp": "2026-04-21T13:32:59.318Z"
+    },
+    {
+      "topic": "Task Analysis [task-1776779000993-omglg4]",
+      "lesson": "\"Understood. Executing the Port Reset & Lockdown sequence to address the dev server port increment issue.\"\n\n\"All processes on ports 3001-3007 have been killed. Clearing cached port state.\"\n\n\"Cached port state cleared. Restarting dev server on port 3001 with --strictPort to enforce binding.\"\n\n\"Port R",
+      "implemented": true,
+      "timestamp": "2026-04-21T13:43:27.750Z"
+    },
+    {
+      "topic": "Workflow Injection: Build me a React todo app inte",
+      "lesson": "Successful build pattern for: Build me a React todo app interacive",
+      "implemented": true,
+      "timestamp": "2026-04-21T19:02:45.568Z"
+    },
+    {
+      "topic": "Task Analysis [task-1776798136999-vc1wai]",
+      "lesson": "\"Let's create a React Todo App. I'll guide you through the process.\"\n\n\"Starting with Step 1, creating a new React project...\"\n\n\"Project setup complete. Creating components...\"\n\n\"TodoList component created. Creating TodoItem component...\"\n\n\"TodoItem component created. Creating AddTodoForm component..",
+      "implemented": true,
+      "timestamp": "2026-04-21T19:02:45.830Z"
+    },
+    {
+      "topic": "Workflow Injection: Build a tiny one-page React+Vi",
+      "lesson": "Successful build pattern for: Build a tiny one-page React+Vite hello-world site styled with Tailwind. Just a centered gradient hero saying 'Phase 12.3 OK'. No router, no extra components.",
+      "implemented": true,
+      "timestamp": "2026-04-23T21:06:14.511Z"
+    }
+  ]
+}

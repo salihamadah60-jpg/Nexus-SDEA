@@ -1,0 +1,6 @@
+{
+  "name": "Nexus AI Sovereign IDE",
+  "description": "A high-performance, AI-driven development environment powered by Nexus Sovereign DNA (v6.2). Features session isolation, real-time code execution, and multi-model AI synthesis.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

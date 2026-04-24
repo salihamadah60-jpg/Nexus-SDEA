@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Nexus AI — Sovereign IDE v6.2</title>
+    <meta name="description" content="Nexus AI — The Sovereign Intelligence IDE. Full-stack architectural assistant with integrated terminal, file explorer, and multi-model AI engine." />
+</head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+    <script>
+      // Suppress Vite HMR errors from overlaying on the UI
+      if (window.location.hostname !== 'localhost') {
+        window.addEventListener('error', (e) => {
+          if (e.message && (e.message.includes('vite') || e.message.includes('WebSocket'))) {
+            e.stopImmediatePropagation();
+          }
+        }, true);
+      }
+    </script>
+  </body>
+</html>

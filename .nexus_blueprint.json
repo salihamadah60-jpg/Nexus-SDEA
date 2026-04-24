@@ -1,0 +1,27 @@
+{
+  "project": "Nexus AI Core",
+  "version": "2.0",
+  "files": {
+    "server.ts": {
+      "purpose": "Backend Node.js server handling API routes, WebSockets for terminal, and AI chat processing.",
+      "functions": {
+        "startServer": "Initializes Express and middle-wares.",
+        "executeTerminalCommand": "Spawns shell processes and broadcasts output."
+      }
+    },
+    "App.tsx": {
+      "purpose": "Main React frontend orchestrating Chat, File Explorer, Terminal, and Sidebar UI.",
+      "components": {
+        "ChatMessage": "Renders AI/User messages with collapsible thoughts and markdown support.",
+        "CodeBlock": "Handles syntax highlighting and terminal output simulation."
+      }
+    },
+    "KERNEL_CORE.md": {
+      "purpose": "Hardcoded system protocols and architectural directives."
+    }
+  },
+  "patterns": {
+    "file_search": "grep -rI --exclude-dir=node_modules",
+    "replace": "sed -i"
+  }
+}

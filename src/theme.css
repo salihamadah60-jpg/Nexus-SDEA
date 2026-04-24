@@ -1,0 +1,281 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@400;700;900&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --color-nexus-black:    var(--nexus-black);
+  --color-nexus-surface:  var(--nexus-surface);
+  --color-nexus-border:   var(--nexus-border-col);
+  --color-nexus-cyan:     var(--nexus-accent-cyan);
+  --color-nexus-gold:     var(--nexus-accent-gold);
+  --color-accent-glow:    var(--nexus-accent-gold);
+  --color-nexus-purple:   var(--nexus-accent-purple);
+  --color-nexus-green:    var(--nexus-accent-green);
+  --color-nexus-red:      #ef4444;
+  --color-text-main:      var(--text-main);
+  --color-text-dim:       var(--text-dim);
+  --color-bg-deep:        var(--nexus-black);
+  --color-bg-surface:     var(--nexus-surface);
+  --color-border:         var(--nexus-border-col);
+
+  --font-sans:    "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Outfit", sans-serif;
+  --font-mono:    "JetBrains Mono", monospace;
+}
+
+:root {
+  /* Default: Nexus VS Code Dark+ */
+  --nexus-black: #1e1e1e;
+  --nexus-surface: #252526;
+  --nexus-border-col: #333333;
+  --nexus-accent-gold: #d4af37;
+  --nexus-accent-cyan: #4ec9b0;
+  --nexus-accent-purple: #c586c0;
+  --nexus-accent-green: #6a9955;
+  --text-main: #d4d4d4;
+  --text-dim: #808080;
+}
+
+[data-theme='monokai'] {
+  --nexus-black: #272822;
+  --nexus-surface: #1e1f1c;
+  --nexus-border-col: #3e3d32;
+  --nexus-accent-gold: #e6db74;
+  --nexus-accent-cyan: #a6e22e;
+  --nexus-accent-purple: #ae81ff;
+  --nexus-accent-green: #a6e22e;
+  --text-main: #f8f8f2;
+  --text-dim: #75715e;
+}
+
+[data-theme='github-dark'] {
+  --nexus-black: #0d1117;
+  --nexus-surface: #161b22;
+  --nexus-border-col: #30363d;
+  --nexus-accent-gold: #d29922;
+  --nexus-accent-cyan: #58a6ff;
+  --nexus-accent-purple: #bc8cff;
+  --nexus-accent-green: #3fb950;
+  --text-main: #c9d1d9;
+  --text-dim: #8b949e;
+}
+
+[data-theme='dracula'] {
+  --nexus-black: #282a36;
+  --nexus-surface: #1e1f29;
+  --nexus-border-col: #44475a;
+  --nexus-accent-gold: #f1fa8c;
+  --nexus-accent-cyan: #8be9fd;
+  --nexus-accent-purple: #bd93f9;
+  --nexus-accent-green: #50fa7b;
+  --text-main: #f8f8f2;
+  --text-dim: #6272a4;
+}
+
+[data-theme='solar-light'] {
+  --nexus-black: #ffffff;
+  --nexus-surface: #f3f4f6;
+  --nexus-border-col: #d1d5db;
+  --nexus-accent-gold: #b45309;
+  --nexus-accent-cyan: #0284c7;
+  --nexus-accent-purple: #7e22ce;
+  --nexus-accent-green: #15803d;
+  --text-main: #111827;
+  --text-dim: #4b5563;
+}
+
+[data-theme='cyberpunk'] {
+  --nexus-black: #050505;
+  --nexus-surface: #0a0a0f;
+  --nexus-border-col: #ff0055;
+  --nexus-accent-gold: #fefe33;
+  --nexus-accent-cyan: #00f2ff;
+  --nexus-accent-purple: #ff00ff;
+  --nexus-accent-green: #39ff14;
+  --text-main: #ffffff;
+  --text-dim: #b8b8b8;
+}
+
+[data-theme='midnight'] {
+  --nexus-black: #06090f;
+  --nexus-surface: #0d1117;
+  --nexus-border-col: #30363d;
+  --nexus-accent-gold: #c9d1d9;
+  --nexus-accent-cyan: #58a6ff;
+  --nexus-accent-purple: #bc8cff;
+  --nexus-accent-green: #3fb950;
+  --text-main: #f0f6fc;
+  --text-dim: #8b949e;
+}
+
+[data-theme='rose-gold'] {
+  --nexus-black: #1a0f0f;
+  --nexus-surface: #241616;
+  --nexus-border-col: #4a2828;
+  --nexus-accent-gold: #e5c1cd;
+  --nexus-accent-cyan: #b4d2e7;
+  --nexus-accent-purple: #d4a5a5;
+  --nexus-accent-green: #a5d4a5;
+  --text-main: #fdf2f2;
+  --text-dim: #d4a5a5;
+}
+
+[data-theme='emerald'] {
+  --nexus-black: #010c09;
+  --nexus-surface: #021a14;
+  --nexus-border-col: #065f46;
+  --nexus-accent-gold: #fbbf24;
+  --nexus-accent-cyan: #10b981;
+  --nexus-accent-purple: #34d399;
+  --nexus-accent-green: #10b981;
+  --text-main: #ecfdf5;
+  --text-dim: #6ee7b7;
+}
+
+[data-theme='amethyst'] {
+  --nexus-black: #0f051a;
+  --nexus-surface: #1a0a2e;
+  --nexus-border-col: #4c1d95;
+  --nexus-accent-gold: #fde047;
+  --nexus-accent-cyan: #a78bfa;
+  --nexus-accent-purple: #c084fc;
+  --nexus-accent-green: #4ade80;
+  --text-main: #f5f3ff;
+  --text-dim: #a78bfa;
+}
+
+[data-theme='coffee'] {
+  --nexus-black: #fdfcfb;
+  --nexus-surface: #f5f1ed;
+  --nexus-border-col: #d8c4b6;
+  --nexus-accent-gold: #5d4037;
+  --nexus-accent-cyan: #8d6e63;
+  --nexus-accent-purple: #795548;
+  --nexus-accent-green: #4e342e;
+  --text-main: #2c1810;
+  --text-dim: #795548;
+}
+
+[data-theme='slate'] {
+  --nexus-black: #0f172a;
+  --nexus-surface: #1e293b;
+  --nexus-border-col: #334155;
+  --nexus-accent-gold: #f1f5f9;
+  --nexus-accent-cyan: #38bdf8;
+  --nexus-accent-purple: #818cf8;
+  --nexus-accent-green: #2dd4bf;
+  --text-main: #f8fafc;
+  --text-dim: #94a3b8;
+}
+
+[data-theme='obsidian'] {
+  --nexus-black: #000000;
+  --nexus-surface: #050505;
+  --nexus-border-col: #111111;
+  --nexus-accent-gold: #333333;
+  --nexus-accent-cyan: #222222;
+  --nexus-accent-purple: #1a1a1a;
+  --nexus-accent-green: #0f0f0f;
+  --text-main: #888888;
+  --text-dim: #444444;
+}
+
+@layer base {
+  *, *::before, *::after { box-sizing: border-box; }
+
+  body {
+    @apply bg-nexus-black text-text-main antialiased;
+  }
+
+  ::selection {
+    background-color: rgba(212,175,55,0.3);
+  }
+
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(212,175,55,0.2); border-radius: 999px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(212,175,55,0.4); }
+}
+
+@layer components {
+  .nexus-panel {
+    @apply bg-nexus-surface border border-nexus-border rounded-xl shadow-2xl;
+  }
+
+  .nexus-glass {
+    @apply backdrop-blur-xl bg-nexus-surface/60 border border-border;
+  }
+
+  .nexus-label {
+    @apply text-[10px] font-bold uppercase tracking-[0.2em] text-text-dim/60;
+  }
+
+  .nexus-btn {
+    @apply flex items-center gap-2 px-4 h-8 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all active:scale-95;
+  }
+
+  .nexus-btn-gold {
+    @apply flex items-center gap-2 px-4 h-8 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all active:scale-95 bg-nexus-gold/10 border border-nexus-gold/20 text-nexus-gold hover:bg-nexus-gold/20;
+  }
+
+  .nexus-btn-ghost {
+    @apply flex items-center gap-2 px-4 h-8 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all active:scale-95 bg-transparent border border-white/10 text-white/40 hover:text-white hover:border-white/30;
+  }
+
+  .nexus-input {
+    @apply w-full bg-black/30 border-none rounded-lg px-3 py-2 text-sm text-text-main placeholder:text-white/20 focus:outline-none focus:bg-black/40 transition-colors shadow-inner;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar { width: 5px; }
+  .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+  .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(212,175,55,0.15); border-radius: 999px; }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(212,175,55,0.35); }
+}
+
+/* Loading kernel animation */
+@keyframes nexus-pulse-glow {
+  0%, 100% { opacity: 0.15; transform: scale(1); }
+  50%       { opacity: 0.4;  transform: scale(1.08); }
+}
+
+.nexus-loading-kernel .blur-bg {
+  animation: nexus-pulse-glow 3s infinite ease-in-out;
+}
+
+/* Markdown inside chat */
+.markdown-body { font-size: 13px; line-height: 1.65; }
+.markdown-body p { margin-bottom: 0.6em; }
+.markdown-body h1,.markdown-body h2,.markdown-body h3 { font-weight: 700; margin: 0.8em 0 0.4em; }
+.markdown-body code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: rgba(0,242,255,0.08);
+  border: 1px solid rgba(0,242,255,0.15);
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: #00f2ff;
+}
+.markdown-body pre {
+  background: rgba(0,0,0,0.5);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 8px;
+  padding: 12px;
+  overflow-x: auto;
+  margin: 0.6em 0;
+}
+.markdown-body pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: #e0e0e6;
+  font-size: 12px;
+}
+.markdown-body ul { list-style: disc; padding-left: 1.4em; margin-bottom: 0.6em; }
+.markdown-body ol { list-style: decimal; padding-left: 1.4em; margin-bottom: 0.6em; }
+.markdown-body li { margin-bottom: 0.25em; }
+.markdown-body blockquote { border-left: 3px solid rgba(212,175,55,0.4); padding-left: 0.8em; opacity: 0.7; }
+.markdown-body strong { font-weight: 700; }
+.markdown-body a { color: #00f2ff; text-decoration: underline; }
+.markdown-body hr { border: none; border-top: 1px solid rgba(255,255,255,0.08); margin: 0.8em 0; }
+.markdown-body table { width: 100%; border-collapse: collapse; margin: 0.6em 0; font-size: 12px; }
+.markdown-body th { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); padding: 4px 8px; }
+.markdown-body td { border: 1px solid rgba(255,255,255,0.07); padding: 4px 8px; }
