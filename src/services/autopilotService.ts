@@ -5,7 +5,7 @@ import { spawn, ChildProcess } from "child_process";
 import fs from "fs/promises";
 import { existsSync } from "fs";
 import http from "http";
-import { acquirePort, isPortFree } from "./portService.js";
+import { acquirePort, isPortFree, findPidsOnPort, killPid } from "./portService.js";
 import { captureVisualSnapshot } from "./visualService.js";
 import { db } from "./stateDb.js";
 
@@ -123,9 +123,34 @@ async function nukeBrokenNodeModules(projectDir: string, reason: string): Promis
   } catch {}
 }
 
+/** Kill any lingering sandbox dev-server processes from a previous run.
+ * Scans ports 3001–3030; skips the reserved main-server port (5000). */
+async function sweepStaleSandboxPorts(): Promise<void> {
+  const RESERVED = new Set([5000]);
+  const sweepRange = Array.from({ length: 30 }, (_, i) => 3001 + i);
+  const kills: Promise<void>[] = [];
+  for (const port of sweepRange) {
+    if (RESERVED.has(port)) continue;
+    kills.push(
+      findPidsOnPort(port).then(async (pids) => {
+        for (const pid of pids) {
+          if (pid === process.pid) continue; // never self-kill
+          try { await killPid(pid); } catch {}
+        }
+      }).catch(() => {})
+    );
+  }
+  await Promise.allSettled(kills);
+  // Brief pause so the OS releases the sockets
+  await new Promise(r => setTimeout(r, 400));
+}
+
 export async function setupAutopilot(broadcast: (data: string, sid?: string, tid?: string, channel?: any) => void) {
   activeProcesses.clear();
   console.log("🚀 [AUTOPILOT] Initializing Sovereign Autopilot Protocol [v7.5]...");
+
+  // Kill stale dev-server processes from the previous run so port 3001 is clean.
+  await sweepStaleSandboxPorts();
 
   // Phase 12.5 — Only restore sessions that exist in SQLite
   const liveSessions = getLiveSessions();
@@ -318,9 +343,17 @@ async function ensureDevServer(
   broadcast: (data: string, sid?: string, tid?: string, channel?: any) => void
 ) {
   const sessionState = activeProcesses.get(sessionId);
-  if (!sessionState?.devProcess || sessionState.status === "ERROR") {
+  // Don't start a second server if one is already starting/running/errored out.
+  // ERROR state is intentionally left alone — only explicit triggerSessionBoot or
+  // a fresh file-add after GC should restart after total failure.
+  if (!sessionState) {
     await startDevServer(sessionId, projectDir, broadcast);
+    return;
   }
+  if (sessionState.status === "STARTING" || sessionState.status === "INSTALLING") return;
+  if (sessionState.status === "ERROR") return; // silent — don't spam error broadcasts
+  if (sessionState.devProcess) return;         // already running
+  await startDevServer(sessionId, projectDir, broadcast);
 }
 
 async function startDevServer(
@@ -340,6 +373,10 @@ async function startDevServer(
     sessionState.devProcess.kill("SIGTERM");
     sessionState.devProcess = null;
   }
+
+  // Guard: if already ERROR after MAX_ATTEMPTS, don't restart from watcher events —
+  // only an explicit triggerSessionBoot call (which resets startAttempts) should retry.
+  if (sessionState.status === "ERROR") return;
 
   if (sessionState.startAttempts >= MAX_ATTEMPTS) {
     sessionState.status = "ERROR";
@@ -377,10 +414,24 @@ async function startDevServer(
     sessionState.devProcess = dev;
 
     const readyPattern = /ready in|Local:|Network:|started server|listening on|http:\/\/localhost|Available on:|compiled successfully|webpack compiled/i;
+    // Vite drifts ports when requested port is busy — parse the real port from stdout.
+    // Matches: "Local:   http://localhost:3003/" or "  ➜  Local:   http://localhost:3003/"
+    const portDetectPattern = /(?:Local|localhost):.*?:(\d{4,5})\/?/i;
 
     dev.stdout?.on("data", (data) => {
       const output = data.toString();
       broadcast(`\x1b[32m[DEV] ${output}\x1b[0m`, sessionId, undefined, "journal");
+
+      // Detect actual port chosen by Vite (may differ from requested when port was busy)
+      const portMatch = output.match(portDetectPattern);
+      if (portMatch) {
+        const detectedPort = parseInt(portMatch[1], 10);
+        if (!isNaN(detectedPort) && detectedPort !== sessionState!.port) {
+          broadcast(`\x1b[36m[AUTOPILOT] Vite selected port ${detectedPort} (requested ${sessionState!.port}).\x1b[0m\r\n`, sessionId, undefined, "journal");
+          sessionState!.port = detectedPort;
+        }
+      }
+
       if (readyPattern.test(output) && sessionState!.status !== "READY") {
         performVisualAudit(sessionId, projectDir, sessionState!.port, broadcast);
       }
@@ -518,6 +569,12 @@ export async function triggerSessionBoot(
   }
   const existing = activeProcesses.get(sessionId);
   if (existing?.status === 'READY' || existing?.status === 'INSTALLING') return;
+  // Reset ERROR state so that a manual triggerSessionBoot call gets a fresh attempt.
+  if (existing?.status === 'ERROR') {
+    existing.startAttempts = 0;
+    existing.installAttempts = 0;
+    existing.status = 'IDLE';
+  }
   await triggerInstallAndRun(sessionId, projectDir, broadcast);
 }
 
