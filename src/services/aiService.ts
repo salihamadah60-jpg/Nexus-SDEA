@@ -92,6 +92,34 @@ interface TerminalResult {
 
 const parseLog = nexusLog("parse");
 
+/**
+ * Strip invalid // comments from CSS content. The Tailwind v4 Vite plugin throws
+ * "Invalid declaration" when the AI writes "// comment @import 'tailwindcss'"
+ * (JavaScript-style comments are not valid CSS).
+ * Rules:
+ *  1. Remove any line whose first non-whitespace characters are //
+ *  2. Strip inline // ... text that appears before an @import (the whole prefix is removed)
+ *  3. Ensure @import "tailwindcss" is the very first meaningful line if it exists anywhere
+ */
+function sanitizeCssContent(css: string): string {
+  const lines = css.split('\n');
+  const cleaned: string[] = [];
+  for (const line of lines) {
+    const trimmed = line.trimStart();
+    // Remove pure // comment lines
+    if (trimmed.startsWith('//')) continue;
+    // Strip inline // comment prefix that was accidentally merged with @import
+    // e.g.: "// TailwindCSS import @import \"tailwindcss\""
+    if (trimmed.includes('//') && trimmed.includes('@import')) {
+      const importIdx = trimmed.indexOf('@import');
+      cleaned.push(trimmed.slice(importIdx));
+      continue;
+    }
+    cleaned.push(line);
+  }
+  return cleaned.join('\n');
+}
+
 function parseNexusResponse(text: string, sessionId?: string, turn?: number): ParsedResponse {
   // Phase 12.2 — log raw response so we can observe fence-wrapping or marker echoing on follow-up turns.
   if (sessionId) {
@@ -354,6 +382,13 @@ STACK PREFERENCES (Phase 12.3 — non-negotiable defaults):
 • Animation: framer-motion ^11. Icons: lucide-react. Utilities: clsx + tailwind-merge.
 • Bundle ALL dependencies in a SINGLE [NEXUS:TERMINAL]npm install A B C[/NEXUS:TERMINAL] call — never split into multiple installs.
 • Never hand-write a postcss.config.js for Tailwind v4 (the Vite plugin replaces it).
+
+⚠️ CRITICAL CSS RULE — VIOLATION BREAKS THE BUILD:
+CSS files DO NOT support // comments. Only /* */ is valid CSS.
+src/index.css MUST begin with EXACTLY this on line 1, nothing before it, no // comments anywhere:
+  @import "tailwindcss";
+NEVER write: // some comment @import "tailwindcss"  ← THIS CRASHES TAILWIND v4 VITE PLUGIN.
+NEVER add a // comment above or beside @import in any .css file.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 INTENT INFERENCE — DIRECT EXECUTION (ABSOLUTE LAW):
@@ -882,7 +917,11 @@ export function createChatHandler(broadcast: (data: string, sid?: string) => voi
         try {
           const targetPath = await validatePath(sessionId, file.path, true);
           await fs.mkdir(path.dirname(targetPath), { recursive: true });
-          await fs.writeFile(targetPath, file.content);
+          // Sanitize CSS files: strip invalid // comments that break Tailwind v4 Vite plugin
+          const sanitizedContent = file.path.endsWith('.css')
+            ? sanitizeCssContent(file.content)
+            : file.content;
+          await fs.writeFile(targetPath, sanitizedContent);
           fileResults.push({ path: file.path, size: file.content.length });
           send({ nexus_file_write: { path: file.path, size: file.content.length } });
           
@@ -907,12 +946,16 @@ export function createChatHandler(broadcast: (data: string, sid?: string) => voi
         const diagnostics = await runDiagnostics(sessionId);
         for (const diag of diagnostics) {
           if (!diag.success) {
-            send({ nexus_streaming: true, status: `Diagnostic Warning: ${diag.type.toUpperCase()} failed.` });
+            if (diag.type === 'css' && diag.autoFixed) {
+              send({ nexus_streaming: true, status: `CSS Auto-Fix: Removed invalid // comments from CSS files — Vite will hot-reload.` });
+            } else {
+              send({ nexus_streaming: true, status: `Diagnostic Warning: ${diag.type.toUpperCase()} — ${diag.output.slice(0, 120)}` });
+            }
             await logHistory({
               taskId,
               sessionId,
               timestamp: new Date().toISOString(),
-              action: "visual_audit", // Using visual_audit as a generic diagnostic action for now
+              action: "visual_audit",
               details: diag
             });
           }

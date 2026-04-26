@@ -145,6 +145,68 @@ async function sweepStaleSandboxPorts(): Promise<void> {
   await new Promise(r => setTimeout(r, 400));
 }
 
+/**
+ * Strip invalid // comments from CSS. Called when Tailwind v4 Vite plugin throws
+ * "Invalid declaration" because the AI wrote // comments inside a .css file.
+ */
+function sanitizeCssContent(css: string): string {
+  return css.split('\n').reduce<string[]>((acc, line) => {
+    const trimmed = line.trimStart();
+    if (trimmed.startsWith('//')) return acc; // drop pure // comment lines
+    if (trimmed.includes('//') && trimmed.includes('@import')) {
+      // e.g. "// TailwindCSS import @import \"tailwindcss\"" → "@import \"tailwindcss\""
+      acc.push(trimmed.slice(trimmed.indexOf('@import')));
+      return acc;
+    }
+    acc.push(line);
+    return acc;
+  }, []).join('\n');
+}
+
+/**
+ * Autopilot Error Recovery: detect Vite "Pre-transform error" / "Invalid declaration"
+ * in stderr, parse the offending file path, apply known fixes, and let Vite's HMR
+ * reload the file automatically — no dev-server restart required.
+ */
+async function autoFixVitePreTransformError(
+  errorOutput: string,
+  projectDir: string,
+  sessionId: string,
+  broadcast: (data: string, sid?: string, tid?: string, channel?: any) => void
+): Promise<void> {
+  // Dedupe: ignore if we already ran a fix in the last 3 seconds for this session
+  const key = `vtfix:${sessionId}`;
+  const lastFix = (autoFixVitePreTransformError as any)._lastFix ?? {};
+  const now = Date.now();
+  if (lastFix[key] && now - lastFix[key] < 3000) return;
+  lastFix[key] = now;
+  (autoFixVitePreTransformError as any)._lastFix = lastFix;
+
+  // Parse file path from error: "File: /absolute/path/to/file.css"
+  const fileMatch = errorOutput.match(/File:\s*([^\n\r]+)/);
+  if (!fileMatch) return;
+
+  const offendingPath = fileMatch[1].trim();
+  broadcast(`\x1b[35m[AUTOPILOT] Pre-transform error detected in ${path.basename(offendingPath)} — attempting auto-fix...\x1b[0m\r\n`, sessionId, undefined, "journal");
+
+  try {
+    const original = await fs.readFile(offendingPath, 'utf-8');
+    const isCss = offendingPath.endsWith('.css');
+    if (!isCss) return; // only CSS auto-fix supported for now
+
+    const fixed = sanitizeCssContent(original);
+    if (fixed === original) {
+      broadcast(`\x1b[33m[AUTOPILOT] Pre-transform error in ${path.basename(offendingPath)} — no auto-fix pattern matched. Manual inspection needed.\x1b[0m\r\n`, sessionId, undefined, "journal");
+      return;
+    }
+
+    await fs.writeFile(offendingPath, fixed, 'utf-8');
+    broadcast(`\x1b[32m[AUTOPILOT] Auto-fixed invalid CSS in ${path.basename(offendingPath)} — Vite HMR will reload.\x1b[0m\r\n`, sessionId, undefined, "journal");
+  } catch (err: any) {
+    broadcast(`\x1b[31m[AUTOPILOT] Auto-fix failed for ${path.basename(offendingPath)}: ${err.message}\x1b[0m\r\n`, sessionId, undefined, "journal");
+  }
+}
+
 export async function setupAutopilot(broadcast: (data: string, sid?: string, tid?: string, channel?: any) => void) {
   activeProcesses.clear();
   console.log("🚀 [AUTOPILOT] Initializing Sovereign Autopilot Protocol [v7.5]...");
@@ -450,6 +512,11 @@ async function startDevServer(
         }).catch(err => {
           broadcast(`\x1b[31m[AUTOPILOT] Port acquisition failed: ${err.message}\x1b[0m\r\n`, sessionId, undefined, "journal");
         });
+      }
+      // Detect Vite pre-transform errors (e.g. invalid CSS // comments from AI)
+      // and auto-fix the offending file so Vite's HMR can recover without a restart.
+      if (output.includes("Pre-transform error") || output.includes("Invalid declaration")) {
+        autoFixVitePreTransformError(output, projectDir, sessionId, broadcast).catch(() => {});
       }
     });
 

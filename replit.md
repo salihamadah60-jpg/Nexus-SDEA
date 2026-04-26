@@ -1,5 +1,14 @@
 # Nexus AI Sovereign IDE v8.0 — Silent Operator
 
+## Bug Fixes Applied (2026-04-26 — Phase 12.6 — CSS Error Detection & Auto-Fix)
+
+| # | Fix | Files | Summary |
+|---|-----|-------|---------|
+| 9 | **CSS `//` comment crash** | `aiService.ts` | AI was writing `// comment @import "tailwindcss"` in CSS — invalid CSS that crashes Tailwind v4 Vite plugin. `sanitizeCssContent()` strips all `//` lines/prefixes from `.css` files before they are written to disk. |
+| 10 | **System prompt CSS rule** | `aiService.ts` | Added explicit ⚠️ CRITICAL CSS RULE to system prompt: CSS never uses `//` comments; `@import "tailwindcss"` must be first line with nothing before it. |
+| 11 | **Vite pre-transform auto-fix** | `autopilotService.ts` | Autopilot stderr handler now detects `Pre-transform error`/`Invalid declaration`. Calls `autoFixVitePreTransformError()` which parses the offending file path from the error, strips `//` comments, rewrites the file, and lets Vite HMR recover without a restart. |
+| 12 | **Post-build CSS diagnostics** | `diagnosticService.ts` | `runDiagnostics()` now scans all `.css` files in the sandbox for invalid `//` comments and auto-fixes them before the dev server starts, giving a third line of defence. |
+
 ## Bug Fixes Applied (2026-04-26 — Pre-Phase 12.5 Session)
 
 | # | Fix | Files | Summary |
