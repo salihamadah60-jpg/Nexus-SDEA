@@ -1,5 +1,12 @@
 # Nexus AI Sovereign IDE v8.0 — Silent Operator
 
+## Phase 12.8 — Self-Healing History Panel (2026-04-26)
+
+| # | Feature | Files | Summary |
+|---|---------|-------|---------|
+| 18 | **Self-Healing Panel** | `SelfHealingPanel.tsx`, `NavigationRail.tsx`, `NexusCore.tsx` | New sidebar panel accessible via the ShieldCheck icon in session mode. Parses two live sources: (1) terminal journal lines for AUTOPILOT Vite/CSS healer events, (2) SSE `statusHistory` from chat messages for Reviewer audit events. Displays structured HealEvent rows (pass type, status, filename, detail), a 6-stat summary bar (healed/failed/pattern/AI/audit/total), and a live success-rate badge. Auto-scrolls, supports clear, expandable detail rows. |
+| 19 | **Real Dependency Audit Gate** | `aiService.ts` | Replaced the 800ms fake delay with a real `npm audit --json --audit-level=high` execution. Parses vulnerability JSON, surfaces high/critical package names and count to the journal stream before install proceeds. |
+
 ## Bug Fixes Applied (2026-04-26 — Phase 12.7 — AI Self-Healing Loop)
 
 | # | Fix | Files | Summary |

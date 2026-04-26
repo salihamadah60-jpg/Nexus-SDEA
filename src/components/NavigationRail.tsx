@@ -12,6 +12,7 @@ import {
   Activity,
   Network,
   Brain,
+  ShieldCheck,
 } from 'lucide-react';
 import { cn } from '../utils';
 
@@ -30,6 +31,7 @@ const SESSION_TABS = [
   { id: 'blackboard', icon: Network,       label: 'Blackboard'},
   { id: 'vault',      icon: Brain,         label: 'Vault'     },
   { id: 'activity',   icon: Activity,      label: 'Activity'  },
+  { id: 'heal',       icon: ShieldCheck,   label: 'Healing'   },
   { id: 'snapshots',  icon: Camera,        label: 'Visuals'   },
   { id: 'preview',    icon: Globe,         label: 'Preview'   },
   { id: 'chat',       icon: Zap,           label: 'Chat'      },

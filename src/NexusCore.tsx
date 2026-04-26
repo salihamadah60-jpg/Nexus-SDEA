@@ -16,6 +16,7 @@ import { LoadingKernel } from './components/LoadingKernel';
 import { ChatPanel } from './components/ChatPanel';
 import BlackboardPanel from './components/BlackboardPanel';
 import KnowledgeVaultPanel from './components/KnowledgeVaultPanel';
+import { SelfHealingPanel } from './components/SelfHealingPanel';
 import { FirstRunKeyBanner } from './components/FirstRunKeyBanner';
 import { motion, AnimatePresence } from 'motion/react';
 import { X } from 'lucide-react';
@@ -71,6 +72,7 @@ export function NexusCore() {
       }} />;
       case 'tasks': return <TaskTracker tasks={state.tasks || []} activeTaskId={state.activeTaskId} />;
       case 'activity': return <ActivityFeed />;
+      case 'heal': return <SelfHealingPanel />;
       case 'settings': return <SettingsPanel />;
       case 'snapshots': return <VisualSnapshotPanel />;
       case 'blackboard': return <BlackboardPanel sessionId={state.currentSessionId} />;
@@ -124,7 +126,9 @@ export function NexusCore() {
               >
                 <div className="flex items-center justify-between px-4 py-2 border-b border-white/5 bg-white/[0.02] shrink-0">
                   <span className="text-[10px] font-bold uppercase tracking-widest text-text-dim">
-                    {activeTab === 'explorer' ? 'Navigator' : activeTab}
+                    {activeTab === 'explorer' ? 'Navigator'
+                     : activeTab === 'heal' ? 'Self-Healing'
+                     : activeTab}
                   </span>
                   <button 
                     onClick={() => setIsSidebarOpen(false)}
