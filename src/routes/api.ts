@@ -102,6 +102,7 @@ router.get("/status", (req, res) => {
     gemini: (GEMINI_API_KEY || ALT_GEMINI_KEY) ? "ACTIVE" : "MISSING",
     hf: HUGGINGFACE_TOKEN ? "ACTIVE" : "MISSING",
     groq: GROQ_API_KEY ? "ACTIVE" : "MISSING",
+    sandbox: e2bManager.isReachable() ? "e2b" : "local",
   });
 });
 

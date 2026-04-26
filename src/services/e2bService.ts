@@ -12,9 +12,22 @@
  *   - closeSandbox(sessionId)
  */
 import { Sandbox } from "e2b";
+import https from "https";
 import { nexusLog } from "./logService.js";
 
 const log = nexusLog("e2b");
+
+/** Quick TCP/HTTPS reachability check — times out in 4 s. */
+function canReach(host: string, port = 443): Promise<boolean> {
+  return new Promise(resolve => {
+    const req = https.get({ hostname: host, port, path: "/", timeout: 4000 }, res => {
+      res.resume();
+      resolve(true);
+    });
+    req.on("timeout", () => { req.destroy(); resolve(false); });
+    req.on("error", () => resolve(false));
+  });
+}
 
 export interface CommandResult {
   stdout: string;
@@ -36,17 +49,63 @@ class E2BManager {
   private sandboxes: Map<string, Sandbox> = new Map();
   private errors: Map<string, CommandResult> = new Map();
 
+  // Connectivity cache — avoid probing on every request.
+  // null = not tested yet, true/false = cached result (re-checked every 5 min).
+  private _reachable: boolean | null = null;
+  private _reachableAt = 0;
+  private readonly REACHABLE_TTL = 5 * 60 * 1000; // 5 minutes
+
   static getInstance() {
     if (!E2BManager.instance) E2BManager.instance = new E2BManager();
     return E2BManager.instance;
   }
 
+  /** True if E2B_API_KEY is set AND the E2B API host is reachable on this network. */
   isActive(): boolean { return !!process.env.E2B_API_KEY; }
+
+  /** Synchronous reachability check (uses cached result). */
+  isReachable(): boolean {
+    return this._reachable === true;
+  }
+
+  /** Async connectivity probe — called once at startup and periodically. */
+  async probeConnectivity(): Promise<boolean> {
+    const now = Date.now();
+    if (this._reachable !== null && (now - this._reachableAt) < this.REACHABLE_TTL) {
+      return this._reachable;
+    }
+    if (!process.env.E2B_API_KEY) {
+      this._reachable = false;
+      this._reachableAt = now;
+      return false;
+    }
+    try {
+      const ok = await canReach("api.e2b.dev");
+      this._reachable = ok;
+      this._reachableAt = now;
+      if (!ok) {
+        log.warn("E2B API host (api.e2b.dev) is unreachable — falling back to local sandbox mode. This may be a VPN/firewall restriction.");
+      } else {
+        log.info("E2B API host reachable — remote sandbox mode active.");
+      }
+      return ok;
+    } catch {
+      this._reachable = false;
+      this._reachableAt = now;
+      return false;
+    }
+  }
 
   async createSandbox(sessionId: string): Promise<Sandbox | null> {
     if (this.sandboxes.has(sessionId)) return this.sandboxes.get(sessionId)!;
     const apiKey = process.env.E2B_API_KEY;
     if (!apiKey) return null;
+    // Check network reachability first — if E2B is blocked (VPN/firewall) fall back to local.
+    const reachable = await this.probeConnectivity();
+    if (!reachable) {
+      log.warn(`E2B unreachable for session ${sessionId} — using local sandbox.`);
+      return null;
+    }
     try {
       log.info(`spawning remote sandbox for ${sessionId}…`);
       const sbx = await Sandbox.create({ apiKey, template: "base" });
@@ -55,6 +114,9 @@ class E2BManager {
       return sbx;
     } catch (err: any) {
       log.warn(`E2B sandbox boot failed: ${err?.message?.slice(0, 120)}`);
+      // Mark as unreachable so subsequent calls skip the probe delay.
+      this._reachable = false;
+      this._reachableAt = Date.now();
       return null;
     }
   }

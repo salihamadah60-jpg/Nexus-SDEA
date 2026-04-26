@@ -13,6 +13,7 @@ import { SANDBOX_BASE } from "./src/config/backendConstants.js";
 import fs from "fs/promises";
 import { existsSync } from "fs";
 import { setupAutopilot, getSessionData } from "./src/services/autopilotService.js";
+import { e2bManager } from "./src/services/e2bService.js";
 import { acquirePort, registerNexusPort } from "./src/services/portService.js";
 import { performPreFlightCleanup } from "./src/services/journalService.js";
 import { db, closeDb } from "./src/services/stateDb.js";
@@ -207,6 +208,9 @@ async function bootstrap() {
       res.status(200).send(getLoadingHtml("Neural Re-Syncing...", sessionId));
     });
   });
+
+  // 3.1.5 — Probe E2B reachability (non-blocking; cached result used by /api/status)
+  e2bManager.probeConnectivity().catch(() => {});
 
   // 3.2 Autopilot Initiation
   await setupAutopilot(broadcast);

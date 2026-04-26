@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Globe, RotateCw, ExternalLink, X, Monitor, Tablet, Smartphone, Play, Loader2, Square, RefreshCw, AlertCircle } from 'lucide-react';
+import { Globe, RotateCw, ExternalLink, X, Monitor, Tablet, Smartphone, Play, Loader2, Square, RefreshCw, AlertCircle, Box, Cpu } from 'lucide-react';
 import { useNexus } from '../NexusContext';
 import { cn } from '../utils';
 
 interface Props { isOpen: boolean; setIsOpen: (o: boolean) => void; }
 
 type AutopilotStatus = 'IDLE' | 'INSTALLING' | 'STARTING' | 'READY' | 'ERROR';
+type SandboxMode = 'local' | 'e2b' | null;
 
 export function PreviewPanel({ isOpen, setIsOpen }: Props) {
   const { state } = useNexus();
@@ -14,14 +15,12 @@ export function PreviewPanel({ isOpen, setIsOpen }: Props) {
   const [autopilotStatus, setAutopilotStatus] = useState<AutopilotStatus>('IDLE');
   const [autopilotPort, setAutopilotPort] = useState(3001);
   const [booting, setBooting] = useState(false);
-  const [hasStatic, setHasStatic] = useState(false); // sandbox-preview/<sid>/index.html exists
+  const [hasStatic, setHasStatic] = useState(false);
   const [previewMode, setPreviewMode] = useState<'auto' | 'static' | 'autopilot'>('auto');
+  const [sandboxMode, setSandboxMode] = useState<SandboxMode>(null);
 
   useEffect(() => { setRefreshKey(k => k + 1); }, [state.previewVersion]);
 
-  // Probe the sandbox-preview route — when the Sovereign Blackboard has
-  // persisted at least an index.html, we can render it directly without
-  // needing the autopilot dev server to be booted.
   const probeStatic = useCallback(async () => {
     if (!state.currentSessionId) { setHasStatic(false); return; }
     try {
@@ -45,14 +44,26 @@ export function PreviewPanel({ isOpen, setIsOpen }: Props) {
     } catch {}
   }, [state.currentSessionId]);
 
-  // Poll status every 3 seconds when visible
+  // Fetch sandbox mode once from /api/status (updated every 5 min server-side).
+  const fetchSandboxMode = useCallback(async () => {
+    try {
+      const res = await fetch('/api/status');
+      if (res.ok) {
+        const data = await res.json();
+        setSandboxMode(data.sandbox ?? 'local');
+      }
+    } catch {}
+  }, []);
+
   useEffect(() => {
     if (!isOpen || !state.currentSessionId) return;
     pollStatus();
     probeStatic();
+    fetchSandboxMode();
     const interval = setInterval(() => { pollStatus(); probeStatic(); }, 3000);
-    return () => clearInterval(interval);
-  }, [isOpen, state.currentSessionId, pollStatus, probeStatic]);
+    const modeInterval = setInterval(fetchSandboxMode, 5 * 60 * 1000);
+    return () => { clearInterval(interval); clearInterval(modeInterval); };
+  }, [isOpen, state.currentSessionId, pollStatus, probeStatic, fetchSandboxMode]);
 
   const handleBoot = async () => {
     if (!state.currentSessionId || booting) return;
@@ -74,9 +85,6 @@ export function PreviewPanel({ isOpen, setIsOpen }: Props) {
 
   if (!isOpen || !state.currentSessionId) return null;
 
-  // Choose render source. Static (sandbox-preview) is preferred when files
-  // exist and autopilot isn't already serving — Sovereign Blackboard output
-  // lights up the iframe instantly with no server boot required.
   const useStatic =
     previewMode === 'static' ||
     (previewMode === 'auto' && hasStatic && autopilotStatus !== 'READY');
@@ -94,6 +102,7 @@ export function PreviewPanel({ isOpen, setIsOpen }: Props) {
 
   const cfg = statusConfig[autopilotStatus];
   const isLoading = autopilotStatus === 'INSTALLING' || autopilotStatus === 'STARTING';
+  const isError = autopilotStatus === 'ERROR';
 
   return (
     <div className="flex w-[420px] shrink-0 h-full flex-col bg-[#030306] border-l border-border animate-in slide-in-from-right duration-200">
@@ -139,6 +148,21 @@ export function PreviewPanel({ isOpen, setIsOpen }: Props) {
           <span className={cn('text-[9px] font-bold uppercase tracking-widest', cfg.color)}>
             {cfg.label}
           </span>
+          {/* Sandbox mode badge */}
+          {sandboxMode && (
+            <span
+              title={sandboxMode === 'e2b' ? 'Running in E2B remote sandbox' : 'Running in local sandbox mode'}
+              className={cn(
+                'ml-1 flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[7px] font-bold uppercase tracking-widest border',
+                sandboxMode === 'e2b'
+                  ? 'text-violet-400 border-violet-400/30 bg-violet-400/5'
+                  : 'text-emerald-400 border-emerald-400/30 bg-emerald-400/5'
+              )}
+            >
+              {sandboxMode === 'e2b' ? <Cpu size={7} /> : <Box size={7} />}
+              {sandboxMode === 'e2b' ? 'E2B' : 'Local'}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-1.5">
           {autopilotStatus === 'READY' && (
@@ -150,7 +174,17 @@ export function PreviewPanel({ isOpen, setIsOpen }: Props) {
               <Square size={8} /> Stop
             </button>
           )}
-          {(autopilotStatus === 'IDLE' || autopilotStatus === 'ERROR') && (
+          {isError && (
+            <button
+              onClick={handleBoot}
+              disabled={booting}
+              className="flex items-center gap-1 text-[9px] font-bold text-red-400 hover:text-white transition-colors px-2 py-0.5 rounded border border-red-400/40 hover:border-red-400/70 hover:bg-red-400/10 disabled:opacity-50"
+              title="Retry dev server"
+            >
+              <RefreshCw size={8} /> Retry
+            </button>
+          )}
+          {autopilotStatus === 'IDLE' && (
             <button
               onClick={handleBoot}
               disabled={booting}
@@ -168,7 +202,7 @@ export function PreviewPanel({ isOpen, setIsOpen }: Props) {
         </div>
       </div>
 
-      {/* Source toggle (static / autopilot / auto) */}
+      {/* Source toggle */}
       <div className="flex items-center justify-between px-4 py-1 bg-bg-surface/20 border-b border-border/30">
         <span className="text-[8px] uppercase tracking-widest text-text-dim/50">
           Source: <span className={cn('font-bold', useStatic ? 'text-emerald-400' : 'text-nexus-cyan')}>
@@ -213,8 +247,10 @@ export function PreviewPanel({ isOpen, setIsOpen }: Props) {
           </div>
         ) : (
           <div className="flex flex-col items-center justify-center gap-6 text-center max-w-xs">
-            {autopilotStatus === 'ERROR' ? (
-              <AlertCircle size={32} className="text-red-400/60" />
+            {isError ? (
+              <div className="w-16 h-16 rounded-2xl border border-red-400/20 flex items-center justify-center bg-red-400/5">
+                <AlertCircle size={28} className="text-red-400/80" />
+              </div>
             ) : isLoading ? (
               <div className="relative">
                 <div className="w-12 h-12 rounded-2xl border border-nexus-gold/20 flex items-center justify-center bg-nexus-gold/5">
@@ -226,20 +262,35 @@ export function PreviewPanel({ isOpen, setIsOpen }: Props) {
             )}
             <div>
               <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-text-main mb-1.5">
-                {autopilotStatus === 'ERROR' ? 'Server Error' :
+                {isError ? 'Dev Server Error' :
                  autopilotStatus === 'INSTALLING' ? 'Installing Dependencies' :
                  autopilotStatus === 'STARTING' ? 'Starting Dev Server' :
                  'Preview Not Running'}
               </p>
               <p className="text-[10px] text-text-dim/40 leading-relaxed">
-                {autopilotStatus === 'ERROR'
-                  ? 'Check the terminal for errors, then click Boot to retry.'
+                {isError
+                  ? 'The dev server failed to start. Check the terminal for details.'
                   : isLoading
                   ? 'Nexus Autopilot is preparing your project...'
                   : 'Build a project in the chat panel. Nexus will auto-start the preview, or click Boot manually.'}
               </p>
             </div>
-            {(autopilotStatus === 'IDLE' || autopilotStatus === 'ERROR') && (
+            {isError && (
+              <div className="flex flex-col items-center gap-2 w-full">
+                <button
+                  onClick={handleBoot}
+                  disabled={booting}
+                  className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-red-500/10 border border-red-400/40 text-red-400 hover:bg-red-500/20 hover:border-red-400/70 hover:text-red-300 text-[11px] font-bold uppercase tracking-widest active:scale-95 transition-all disabled:opacity-50"
+                >
+                  <RefreshCw size={12} className={booting ? 'animate-spin' : ''} />
+                  {booting ? 'Retrying...' : 'Retry Dev Server'}
+                </button>
+                <p className="text-[9px] text-text-dim/30 uppercase tracking-widest">
+                  Check the terminal tab for error details
+                </p>
+              </div>
+            )}
+            {autopilotStatus === 'IDLE' && (
               <button
                 onClick={handleBoot}
                 disabled={booting}
