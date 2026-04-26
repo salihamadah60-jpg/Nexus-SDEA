@@ -20,7 +20,6 @@ import { sessionCost, globalCostSummary } from "../services/costService.js";
 import { indexSession, retrieve, renderContext } from "../services/ragService.js";
 import { symbolStats } from "../services/symbolService.js";
 import { db } from "../services/stateDb.js";
-import { keyPool } from "../services/keyPoolService.js";
 import { isDbConnected } from "../config/db.js";
 import { nexusLog } from "../services/logService.js";
 import { deepseekStatus } from "../services/deepseekService.js";

@@ -59,10 +59,17 @@ export function recordDecision(sessionId: string, decision: string) {
 }
 
 /**
- * Compact a long history into a slim list ready for the LLM:
- *   - tail of `keepRecent` turns kept as-is
- *   - everything older summarized into a single synthetic system turn
+ * Phase 12.2 — neutralize any [NEXUS:FILE:…] markers inside a content string
+ * by renaming them to [NEXUS:FILE_PREV:…] / [/NEXUS:FILE_PREV].
+ * This prevents the model from re-echoing stale file blocks from prior turns
+ * and having them picked up by the current-turn parser.
  */
+function neutralizeFileMarkers(content: string): string {
+  return content
+    .replace(/\[NEXUS:FILE:([^\]]*)\]/gi, "[NEXUS:FILE_PREV:$1]")
+    .replace(/\[\/NEXUS:FILE\]/gi, "[/NEXUS:FILE_PREV]");
+}
+
 export function compactHistory(history: MemoryTurn[], keepRecent = 8): MemoryTurn[] {
   if (history.length <= keepRecent) return history;
   const old = history.slice(0, history.length - keepRecent);
@@ -70,7 +77,10 @@ export function compactHistory(history: MemoryTurn[], keepRecent = 8): MemoryTur
 
   const summaryLines: string[] = [];
   for (const t of old) {
-    const text = (t.content || "").replace(/\s+/g, " ").trim();
+    // Phase 12.2 — neutralize FILE markers before summarizing so the model cannot
+    // accidentally echo them as new file writes in a follow-up turn.
+    const neutralized = neutralizeFileMarkers(t.content || "");
+    const text = neutralized.replace(/\s+/g, " ").trim();
     if (!text) continue;
     if (text.length <= 140) {
       summaryLines.push(`${t.role === "user" ? "U" : "A"}: ${text}`);
@@ -78,12 +88,22 @@ export function compactHistory(history: MemoryTurn[], keepRecent = 8): MemoryTur
       summaryLines.push(`${t.role === "user" ? "U" : "A"}: ${text.slice(0, 137)}…`);
     }
   }
+
+  // Phase 12.2 — also neutralize markers in the recent turns that are kept verbatim,
+  // but ONLY in the assistant turns (user messages should stay untouched).
+  // This handles the edge case where the model echoes a full prior response.
+  const recentCleaned = recent.map(t =>
+    t.role === "assistant"
+      ? { ...t, content: neutralizeFileMarkers(t.content || "") }
+      : t
+  );
+
   const summary: MemoryTurn = {
     role: "assistant",
     content: `[MEMORY DIGEST — ${old.length} earlier turns compacted]\n${summaryLines.join("\n")}`,
     ts: Date.now(),
   };
-  return [summary, ...recent];
+  return [summary, ...recentCleaned];
 }
 
 /** Render facts as a compact string for prompt injection. */

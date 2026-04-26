@@ -23,6 +23,7 @@ import { keyPool, classifyError, type KeyState, type ProviderName } from "./keyP
 import { classifyIntent, intentDirective, sanitizeLanguage } from "./intentService.js";
 import { compactHistory, recordFiles, recordPort, recordDecision, getFacts, renderFacts } from "./memoryService.js";
 import { eventStream } from "./eventStreamService.js";
+import { nexusLog } from "./logService.js";
 import http from "http";
 
 /**
@@ -86,14 +87,26 @@ interface TerminalResult {
   fixedCmd?: string;
 }
 
-function parseNexusResponse(text: string): ParsedResponse {
+const parseLog = nexusLog("parse");
+
+function parseNexusResponse(text: string, sessionId?: string, turn?: number): ParsedResponse {
+  // Phase 12.2 — log raw response so we can observe fence-wrapping or marker echoing on follow-up turns.
+  if (sessionId) {
+    parseLog.debug(`[parse] raw response session=${sessionId} turn=${turn ?? "?"} len=${text.length}:\n${text.slice(0, 4000)}`);
+  }
+
+  // Phase 12.2 — pre-strip markdown code fences so the model cannot hide markers inside
+  // ```text … ``` blocks when "quoting" a prior turn. This collapses any fenced block
+  // while preserving the interior content (markers survive, plain code is also exposed).
+  const stripped = text.replace(/```[^\n]*\n([\s\S]*?)```/g, (_m, inner) => inner);
+
   const extract = (tag: string): string => {
-    const match = text.match(new RegExp(`\\[NEXUS:${tag}\\]([\\s\\S]*?)\\[\\/NEXUS:${tag}\\]`, 'i'));
+    const match = stripped.match(new RegExp(`\\[NEXUS:${tag}\\]([\\s\\S]*?)\\[\\/NEXUS:${tag}\\]`, 'i'));
     return match ? match[1].trim() : '';
   };
 
   const extractAll = (tag: string): string[] => {
-    const matches = text.matchAll(new RegExp(`\\[NEXUS:${tag}\\]([\\s\\S]*?)\\[\\/NEXUS:${tag}\\]`, 'gi'));
+    const matches = stripped.matchAll(new RegExp(`\\[NEXUS:${tag}\\]([\\s\\S]*?)\\[\\/NEXUS:${tag}\\]`, 'gi'));
     return Array.from(matches).map(m => m[1].trim()).filter(Boolean);
   };
 
@@ -104,20 +117,25 @@ function parseNexusResponse(text: string): ParsedResponse {
 
   const filesRead = extractAll('READ');
 
-  const fileMatches = text.matchAll(/\[NEXUS:FILE:([^\]]+)\]([\s\S]*?)\[\/NEXUS:FILE\]/gi);
+  const fileMatches = stripped.matchAll(/\[NEXUS:FILE:([^\]]+)\]([\s\S]*?)\[\/NEXUS:FILE\]/gi);
   const filesToWrite = Array.from(fileMatches).map(m => ({
     path: m[1].trim(),
     content: m[2]
   }));
 
+  // Phase 12.2 — loud warning: markers present but nothing extracted. This catches silent regressions.
+  if (stripped.includes('[NEXUS:FILE') && filesToWrite.length === 0) {
+    parseLog.warn(`[parse] ALERT: response contains [NEXUS:FILE marker(s) but 0 files were extracted! session=${sessionId ?? "?"} turn=${turn ?? "?"} — likely a fence-wrapping or tag mismatch. Raw excerpt:\n${stripped.slice(0, 1200)}`);
+  }
+
   const terminals = extractAll('TERMINAL').flatMap(block =>
     block.split('\n').map(l => l.trim()).filter(Boolean)
   );
 
-  const triggerScreenshot = /\[NEXUS:SCREENSHOT\]/i.test(text);
+  const triggerScreenshot = /\[NEXUS:SCREENSHOT\]/i.test(stripped);
   const statusMessages = extractAll('STATUS');
 
-  const summary = text
+  const summary = stripped
     .replace(/\[NEXUS:THOUGHT\][\s\S]*?\[\/NEXUS:THOUGHT\]/gi, '')
     .replace(/\[NEXUS:CHAIN\][\s\S]*?\[\/NEXUS:CHAIN\]/gi, '')
     .replace(/\[NEXUS:READ\][\s\S]*?\[\/NEXUS:READ\]/gi, '')
@@ -733,7 +751,8 @@ export function createChatHandler(broadcast: (data: string, sid?: string) => voi
 
     send({ nexus_streaming: true, status: 'Parsing response...' });
 
-    const parsed = parseNexusResponse(fullResponse);
+    const turnNumber = history.length; // history already has prior turns pushed in; length = current turn index
+    const parsed = parseNexusResponse(fullResponse, sessionId, turnNumber);
 
     // Phase 5: Clarification Bridge (Ambiguity Gate)
     if (fullResponse.includes('[NEXUS:CLARIFY]') || (parsed.summary.length < 50 && !parsed.filesToWrite.length)) {
