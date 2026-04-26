@@ -451,3 +451,92 @@ export async function runBlackboard(input: { goal: string; sessionId?: string; c
 
   return { taskId: t.id, status: "done", task: getTask(t.id)!, artifacts, blockers: [] };
 }
+
+// ─── Shared AI Fix Helpers (used by aiService + autopilotService) ──────────
+
+const FILE_FIX_SYSTEM = `You are a code-repair engine. The user will give you:
+1. A file path and its current content
+2. An error message or audit issues
+
+Return ONLY the complete fixed file content — no markdown fences, no prose, no explanations.
+The output is written directly to disk, so return ONLY the file content.`;
+
+/**
+ * Ask a fast AI to fix a single file given an error message.
+ * Used by autopilotService when Vite emits a runtime/compile error.
+ * Returns the fixed file content string, or null if AI is unavailable.
+ */
+export async function requestAIFileFix(
+  filePath: string,
+  fileContent: string,
+  errorText: string,
+  sessionId?: string,
+  taskId?: string
+): Promise<string | null> {
+  const prompt = `FILE: ${filePath}
+
+ERROR:
+${errorText.slice(0, 1200)}
+
+CURRENT CONTENT:
+${fileContent.slice(0, 6000)}
+
+Return ONLY the complete corrected file content. No markdown. No explanation.`;
+
+  const r =
+    await callGroqJson(prompt, FILE_FIX_SYSTEM, taskId, sessionId) ||
+    await callGeminiText(prompt, FILE_FIX_SYSTEM, taskId, sessionId);
+
+  if (!r?.text) return null;
+
+  // Strip any accidental markdown fences the model may have added
+  const stripped = r.text
+    .replace(/^```[^\n]*\n?/, '')
+    .replace(/\n?```\s*$/, '')
+    .trim();
+  return stripped || null;
+}
+
+/**
+ * Ask a fast AI to regenerate files that failed an audit.
+ * Returns the corrected files array, or null if AI is unavailable / parse fails.
+ */
+export async function requestAuditFix(
+  files: Array<{ path: string; content: string }>,
+  auditIssues: string[],
+  goal: string,
+  sessionId?: string,
+  taskId?: string
+): Promise<Array<{ path: string; content: string }> | null> {
+  const AUDIT_FIX_SYSTEM = `You are a code-repair engine in the Nexus Sovereign IDE.
+You will receive file(s) that failed an automated logic audit, plus the list of issues.
+Return STRICT JSON: {"files":[{"path":"...","content":"<full fixed content>"}]}
+Rules:
+- Address EVERY issue listed
+- COMPLETE file contents only — no truncation, no "// rest of code"
+- No prose, no markdown fences outside the JSON`;
+
+  const fileBlock = files.slice(0, 6).map(f =>
+    `── ${f.path} ──\n${f.content.slice(0, 3000)}`
+  ).join('\n\n');
+
+  const prompt = `GOAL: ${goal.slice(0, 300)}
+
+AUDIT ISSUES (fix ALL of them):
+${auditIssues.map((i, n) => `${n + 1}. ${i}`).join('\n')}
+
+PROPOSED FILES:
+${fileBlock}
+
+Return JSON only: {"files":[{"path":"...","content":"..."}]}`;
+
+  const r =
+    await callGroqJson(prompt, AUDIT_FIX_SYSTEM, taskId, sessionId) ||
+    await callGeminiText(prompt, AUDIT_FIX_SYSTEM, taskId, sessionId);
+
+  if (!r?.text) return null;
+
+  const parsed = parseWriterPayload(r.text);
+  if (!parsed || parsed.files.length === 0) return null;
+  return parsed.files as Array<{ path: string; content: string }>;
+}

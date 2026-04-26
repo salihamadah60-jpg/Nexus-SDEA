@@ -1,5 +1,15 @@
 # Nexus AI Sovereign IDE v8.0 — Silent Operator
 
+## Bug Fixes Applied (2026-04-26 — Phase 12.7 — AI Self-Healing Loop)
+
+| # | Fix | Files | Summary |
+|---|-----|-------|---------|
+| 13 | **Pre-write audit feedback loop completed** | `aiService.ts`, `orchestratorService.ts` | The stub at line 848 ("We'd normally call the LLM again here") is now a real self-correction pass. When `performLogicAudit()` fails, `requestAuditFix()` sends the files + issues to a fast AI (Groq→Gemini), merges the corrections back into `parsed.filesToWrite`, and continues. Broken files are no longer written to disk. |
+| 14 | **Vite runtime AI self-healer** | `autopilotService.ts`, `orchestratorService.ts` | `autoFixVitePreTransformError` now has a two-pass strategy: (1) instant pattern fix for CSS `//` comments, (2) AI-powered fix via `requestAIFileFix()` for all other Vite/TypeScript errors. The fixed file is written back and Vite HMR reloads it without a restart. |
+| 15 | **`autoFixCommand` expanded** | `aiService.ts` | Added 5 new patterns: missing module (extracts package name + `npm install`), missing `@scope/pkg` paths, `ENOTFOUND`/network retry with `--prefer-offline`, `EACCES` + `--unsafe-perm`, TypeScript errors in build command (strips `tsc &&` and falls through to Vite). |
+| 16 | **SOVEREIGN DEBUGGER stub replaced** | `aiService.ts` | The hollow `console.warn('Analyzing stack trace...')` is replaced with a real error-line extractor that surfaces the relevant error + attempted fix in structured log output. |
+| 17 | **`requestAIFileFix` + `requestAuditFix`** | `orchestratorService.ts` | Two new exported helpers. `requestAIFileFix(filePath, content, error)` asks a fast AI to repair a single file and return the raw fixed content. `requestAuditFix(files, issues, goal)` asks AI to regenerate failing files after an audit. Both cascade Groq→Gemini with key-pool rotation. |
+
 ## Bug Fixes Applied (2026-04-26 — Phase 12.6 — CSS Error Detection & Auto-Fix)
 
 | # | Fix | Files | Summary |

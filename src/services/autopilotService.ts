@@ -8,6 +8,7 @@ import http from "http";
 import { acquirePort, isPortFree, findPidsOnPort, killPid } from "./portService.js";
 import { captureVisualSnapshot } from "./visualService.js";
 import { db } from "./stateDb.js";
+import { requestAIFileFix } from "./orchestratorService.js";
 
 /** Probe a URL repeatedly until it returns HTTP 2xx/3xx, or attempts run out. */
 async function verifyPreviewReady(url: string, attempts: number, intervalMs: number): Promise<boolean> {
@@ -163,10 +164,15 @@ function sanitizeCssContent(css: string): string {
   }, []).join('\n');
 }
 
+// Track in-flight AI fix attempts to prevent hammering the API on repeated errors
+const _aiFixInFlight = new Set<string>();
+
 /**
  * Autopilot Error Recovery: detect Vite "Pre-transform error" / "Invalid declaration"
- * in stderr, parse the offending file path, apply known fixes, and let Vite's HMR
- * reload the file automatically — no dev-server restart required.
+ * in stderr, parse the offending file path, then:
+ *   1. Try a fast pattern-based fix (CSS // comments)
+ *   2. Fall back to an AI-powered fix via requestAIFileFix()
+ * Vite's HMR picks up the rewritten file automatically — no restart needed.
  */
 async function autoFixVitePreTransformError(
   errorOutput: string,
@@ -174,36 +180,59 @@ async function autoFixVitePreTransformError(
   sessionId: string,
   broadcast: (data: string, sid?: string, tid?: string, channel?: any) => void
 ): Promise<void> {
-  // Dedupe: ignore if we already ran a fix in the last 3 seconds for this session
-  const key = `vtfix:${sessionId}`;
-  const lastFix = (autoFixVitePreTransformError as any)._lastFix ?? {};
-  const now = Date.now();
-  if (lastFix[key] && now - lastFix[key] < 3000) return;
-  lastFix[key] = now;
-  (autoFixVitePreTransformError as any)._lastFix = lastFix;
-
-  // Parse file path from error: "File: /absolute/path/to/file.css"
+  // Dedupe: ignore if we already ran a fix in the last 5 seconds for this session+file
   const fileMatch = errorOutput.match(/File:\s*([^\n\r]+)/);
   if (!fileMatch) return;
 
   const offendingPath = fileMatch[1].trim();
-  broadcast(`\x1b[35m[AUTOPILOT] Pre-transform error detected in ${path.basename(offendingPath)} — attempting auto-fix...\x1b[0m\r\n`, sessionId, undefined, "journal");
+  const dedupeKey = `vtfix:${sessionId}:${offendingPath}`;
+  const lastFix = (autoFixVitePreTransformError as any)._lastFix ?? {};
+  const now = Date.now();
+  if (lastFix[dedupeKey] && now - lastFix[dedupeKey] < 5000) return;
+  lastFix[dedupeKey] = now;
+  (autoFixVitePreTransformError as any)._lastFix = lastFix;
+
+  broadcast(`\x1b[35m[AUTOPILOT] Pre-transform error in ${path.basename(offendingPath)} — running self-healing...\x1b[0m\r\n`, sessionId, undefined, "journal");
+
+  let original: string;
+  try {
+    original = await fs.readFile(offendingPath, 'utf-8');
+  } catch (err: any) {
+    broadcast(`\x1b[31m[AUTOPILOT] Cannot read ${path.basename(offendingPath)}: ${err.message}\x1b[0m\r\n`, sessionId, undefined, "journal");
+    return;
+  }
+
+  // ── Pass 1: Pattern-based fix (instant, no AI call) ──────────────────────
+  if (offendingPath.endsWith('.css')) {
+    const patternFixed = sanitizeCssContent(original);
+    if (patternFixed !== original) {
+      await fs.writeFile(offendingPath, patternFixed, 'utf-8');
+      broadcast(`\x1b[32m[AUTOPILOT] Pattern-fix applied to ${path.basename(offendingPath)} (removed invalid // comments) — Vite HMR reloading.\x1b[0m\r\n`, sessionId, undefined, "journal");
+      return;
+    }
+  }
+
+  // ── Pass 2: AI-powered fix for any remaining error types ─────────────────
+  if (_aiFixInFlight.has(dedupeKey)) return;
+  _aiFixInFlight.add(dedupeKey);
+
+  broadcast(`\x1b[35m[AUTOPILOT] Pattern-fix insufficient — invoking AI self-healer for ${path.basename(offendingPath)}...\x1b[0m\r\n`, sessionId, undefined, "journal");
 
   try {
-    const original = await fs.readFile(offendingPath, 'utf-8');
-    const isCss = offendingPath.endsWith('.css');
-    if (!isCss) return; // only CSS auto-fix supported for now
+    const relativePath = path.relative(projectDir, offendingPath);
+    const aiFixed = await requestAIFileFix(relativePath, original, errorOutput, sessionId);
 
-    const fixed = sanitizeCssContent(original);
-    if (fixed === original) {
-      broadcast(`\x1b[33m[AUTOPILOT] Pre-transform error in ${path.basename(offendingPath)} — no auto-fix pattern matched. Manual inspection needed.\x1b[0m\r\n`, sessionId, undefined, "journal");
+    if (!aiFixed) {
+      broadcast(`\x1b[33m[AUTOPILOT] AI self-healer: no fix generated (AI busy or key exhausted). Check terminal for details.\x1b[0m\r\n`, sessionId, undefined, "journal");
       return;
     }
 
-    await fs.writeFile(offendingPath, fixed, 'utf-8');
-    broadcast(`\x1b[32m[AUTOPILOT] Auto-fixed invalid CSS in ${path.basename(offendingPath)} — Vite HMR will reload.\x1b[0m\r\n`, sessionId, undefined, "journal");
+    await fs.writeFile(offendingPath, aiFixed, 'utf-8');
+    broadcast(`\x1b[32m[AUTOPILOT] AI self-healer fixed ${path.basename(offendingPath)} — Vite HMR reloading.\x1b[0m\r\n`, sessionId, undefined, "journal");
   } catch (err: any) {
-    broadcast(`\x1b[31m[AUTOPILOT] Auto-fix failed for ${path.basename(offendingPath)}: ${err.message}\x1b[0m\r\n`, sessionId, undefined, "journal");
+    broadcast(`\x1b[31m[AUTOPILOT] AI self-healer error for ${path.basename(offendingPath)}: ${err.message}\x1b[0m\r\n`, sessionId, undefined, "journal");
+  } finally {
+    _aiFixInFlight.delete(dedupeKey);
   }
 }
 

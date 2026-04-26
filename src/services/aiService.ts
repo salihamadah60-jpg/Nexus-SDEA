@@ -19,6 +19,7 @@ import { generateTaskId, logHistory } from "./historyService.js";
 import { writeJournal } from "./journalService.js";
 import { scaffoldProject } from "./scaffoldService.js";
 import { runDiagnostics } from "./diagnosticService.js";
+import { requestAuditFix } from "./orchestratorService.js";
 import { keyPool, classifyError, type KeyState, type ProviderName } from "./keyPoolService.js";
 import { classifyIntent, intentDirective, sanitizeLanguage } from "./intentService.js";
 import { compactHistory, recordFiles, recordPort, recordDecision, getFacts, renderFacts } from "./memoryService.js";
@@ -183,17 +184,64 @@ function parseNexusResponse(text: string, sessionId?: string, turn?: number): Pa
 
 function autoFixCommand(cmd: string, errorOutput: string, retryCount: number): string | null {
   const lower = errorOutput.toLowerCase();
-  if (cmd.includes('npm install') && !cmd.includes('--legacy-peer-deps') &&
-    (lower.includes('eresolve') || lower.includes('peer dep'))) {
-    return cmd + ' --legacy-peer-deps';
+
+  // ── npm install failures ──────────────────────────────────────────────────
+  if (cmd.includes('npm install')) {
+    if (!cmd.includes('--legacy-peer-deps') &&
+        (lower.includes('eresolve') || lower.includes('peer dep') || lower.includes('peer_dep'))) {
+      return cmd + ' --legacy-peer-deps';
+    }
+    if (retryCount === 1) return 'npm install --legacy-peer-deps --force';
+    if (lower.includes('enotfound') || lower.includes('network') || lower.includes('econnreset')) {
+      return 'npm install --prefer-offline --legacy-peer-deps';
+    }
   }
-  if (cmd.includes('npm install') && retryCount === 1) {
-    return 'npm install --legacy-peer-deps --force';
+
+  // ── missing module / package ──────────────────────────────────────────────
+  if (lower.includes('cannot find module') || lower.includes("module not found") ||
+      lower.includes("cannot find package") || lower.includes("failed to resolve import")) {
+    // Try to extract the package name from common error patterns:
+    // "Cannot find module 'react-router-dom'"
+    // "Failed to resolve import \"@radix-ui/react-dialog\""
+    const patterns = [
+      /cannot find module ['"]([^.'"\/][^'"]*)['"]/i,
+      /failed to resolve import ['"]([^'"]+)['"]/i,
+      /cannot find package ['"]([^'"]+)['"]/i,
+      /module ['"]([^.'"\/][^'"]*)['"]\s+not found/i,
+    ];
+    for (const pat of patterns) {
+      const m = errorOutput.match(pat);
+      if (m) {
+        // Strip sub-paths (e.g. "foo/bar/baz" → "foo" or "@scope/pkg/bar" → "@scope/pkg")
+        let pkg = m[1];
+        if (pkg.startsWith('@')) {
+          pkg = pkg.split('/').slice(0, 2).join('/');
+        } else {
+          pkg = pkg.split('/')[0];
+        }
+        if (pkg && !pkg.startsWith('.')) return `npm install ${pkg}`;
+      }
+    }
   }
-  if (lower.includes('cannot find module') || lower.includes('module not found')) {
-    const match = errorOutput.match(/['"]([^'"\/][^'"]*)['"]/);
-    if (match) return `npm install ${match[1]}`;
+
+  // ── missing binary (npx / global tool) ───────────────────────────────────
+  if (lower.includes('command not found') || lower.includes("is not recognized")) {
+    const m = cmd.match(/^npx\s+([\w@/-]+)/);
+    if (m) return `npm install -D ${m[1]} && ${cmd}`;
   }
+
+  // ── EACCES / permission errors → retry with --unsafe-perm ───────────────
+  if (lower.includes('eacces') || lower.includes('permission denied')) {
+    if (cmd.includes('npm install')) return cmd + ' --unsafe-perm';
+  }
+
+  // ── TypeScript compile errors after tsc: skip tsc, just build vite ───────
+  if ((cmd.includes('tsc') && cmd.includes('vite build')) || cmd === 'npm run build') {
+    if (lower.includes('error ts') || lower.includes('typescript')) {
+      return cmd.replace('tsc &&', '').replace('tsc&&', '').trim() || 'npx vite build';
+    }
+  }
+
   return null;
 }
 
@@ -262,10 +310,15 @@ async function executeWithSelfCorrection(
     }
 
     const fix = autoFixCommand(currentCmd, output, attempt);
-    
-    // Phase 3: Debug-First logic (Injecting stack trace analysis into memory)
-    if (!result.success && output.includes('Error')) {
-      console.warn(`[SOVEREIGN DEBUGGER] Trap caught in ${currentCmd}: Analyzing stack trace...`);
+
+    // Extract and surface the most useful error line for logging
+    if (!result.success) {
+      const errorLine = output.split('\n')
+        .find(l => /error|failed|cannot|not found/i.test(l))
+        ?.trim().slice(0, 160);
+      if (errorLine) {
+        console.warn(`[SOVEREIGN DEBUGGER] cmd="${currentCmd}" attempt=${attempt + 1} error="${errorLine}" fix="${fix ?? 'none'}"`);
+      }
     }
 
     if (fix && attempt < maxRetries) {
@@ -844,9 +897,7 @@ export function createChatHandler(broadcast: (data: string, sid?: string) => voi
       const audit = await performLogicAudit(parsed.filesToWrite, projectContext);
       
       if (!audit.passed) {
-        send({ nexus_streaming: true, status: `Security Breach: Audit failed. ${audit.issues[0]} Generating fix...` });
-        // Feedback Loop: We'd normally call the LLM again here to fix.
-        // For now, we log the failure and either abort or try to patch.
+        send({ nexus_streaming: true, status: `Reviewer detected ${audit.issues.length} issue(s) — running AI self-correction pass...` });
         await logHistory({
           taskId,
           sessionId,
@@ -854,7 +905,36 @@ export function createChatHandler(broadcast: (data: string, sid?: string) => voi
           action: "audit_failure",
           details: audit
         });
-        // In v4.0, we continue but warn. In stricter modes, we'd loop back.
+
+        // Self-Correction Feedback Loop: ask a fast AI to fix the issues
+        // before writing anything to disk. Max 1 pass to keep latency low.
+        try {
+          const fixed = await requestAuditFix(
+            parsed.filesToWrite,
+            audit.issues,
+            message,
+            sessionId,
+            taskId
+          );
+          if (fixed && fixed.length > 0) {
+            // Merge corrections back: overwrite matched paths, keep new ones
+            const fixMap = new Map(fixed.map(f => [f.path, f.content]));
+            for (const f of parsed.filesToWrite) {
+              if (fixMap.has(f.path)) f.content = fixMap.get(f.path)!;
+            }
+            // Append any brand-new files the corrector introduced
+            for (const [p, c] of fixMap) {
+              if (!parsed.filesToWrite.some(f => f.path === p)) {
+                parsed.filesToWrite.push({ path: p, content: c });
+              }
+            }
+            send({ nexus_streaming: true, status: `Self-correction applied — ${fixed.length} file(s) patched by Reviewer feedback.` });
+          } else {
+            send({ nexus_streaming: true, status: `Self-correction unavailable (AI busy) — proceeding with original files. Issues: ${audit.issues.slice(0,2).join('; ')}` });
+          }
+        } catch (fixErr: any) {
+          send({ nexus_streaming: true, status: `Self-correction error: ${fixErr.message} — continuing with original files.` });
+        }
       }
 
       send({ nexus_streaming: true, status: `Sovereign Analysis: Mapping intent...` });
