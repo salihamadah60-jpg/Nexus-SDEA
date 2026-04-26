@@ -8,7 +8,8 @@ import rateLimit from "express-rate-limit";
 import fs from "fs/promises";
 import path from "path";
 import { existsSync } from "fs";
-import { runBlackboard } from "../services/orchestratorService.js";
+import { runBlackboard, requestAIFileFix } from "../services/orchestratorService.js";
+import { SANDBOX_BASE } from "../config/backendConstants.js";
 import { listSessionTasks, get as getTask, approveTask } from "../services/blackboardService.js";
 import { validateKey, ValidationResult } from "../services/keyValidatorService.js";
 import { keyPool } from "../services/keyPoolService.js";
@@ -432,6 +433,48 @@ router.post("/keypool/reset", (req, res) => {
   keyPool.refresh(true);
   const out = keyPool.resetDisabled(provider);
   res.json({ ok: true, ...out, provider: provider || "all" });
+});
+
+// ── Self-Healing: on-demand retry ─────────────────────────────────────────
+// POST /api/kernel/heal/retry
+// Body: { sessionId, filePath, errorHint? }
+// Reads the file from the sandbox, calls requestAIFileFix, writes the result,
+// and returns { success, filePath, detail }.
+router.post("/heal/retry", async (req, res) => {
+  const { sessionId, filePath, errorHint } = req.body || {};
+  if (!sessionId || !filePath) {
+    return res.status(400).json({ error: "sessionId and filePath are required" });
+  }
+
+  // Path-traversal guard: resolve inside sandbox only
+  const sandboxRoot = path.join(SANDBOX_BASE, sessionId);
+  const safeRel = path.normalize(filePath).replace(/^([./\\])+/, "");
+  const absPath = path.join(sandboxRoot, safeRel);
+  if (!absPath.startsWith(sandboxRoot)) {
+    return res.status(400).json({ error: "filePath escapes sandbox" });
+  }
+
+  let current: string;
+  try {
+    current = await fs.readFile(absPath, "utf-8");
+  } catch (e: any) {
+    return res.status(404).json({ error: `Cannot read file: ${e.message}` });
+  }
+
+  const errorText = errorHint || "Vite / TypeScript build error — fix all syntax and import issues.";
+
+  try {
+    const fixed = await requestAIFileFix(safeRel, current, errorText, sessionId);
+    if (!fixed) {
+      return res.status(503).json({ success: false, detail: "AI returned no fix (key exhausted or rate-limited)" });
+    }
+    await fs.writeFile(absPath, fixed, "utf-8");
+    log.info(`heal/retry: fixed ${safeRel} (${fixed.length}c) for session ${sessionId.slice(-8)}`);
+    return res.json({ success: true, filePath: safeRel, detail: `AI self-healer rewrote ${safeRel} (${fixed.length} chars) — Vite HMR should reload.` });
+  } catch (e: any) {
+    log.error(`heal/retry error: ${e?.message}`);
+    return res.status(500).json({ success: false, detail: e.message });
+  }
 });
 
 export default router;
