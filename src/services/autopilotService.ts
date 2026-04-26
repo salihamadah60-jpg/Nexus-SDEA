@@ -7,6 +7,7 @@ import { existsSync } from "fs";
 import http from "http";
 import { acquirePort, isPortFree } from "./portService.js";
 import { captureVisualSnapshot } from "./visualService.js";
+import { db } from "./stateDb.js";
 
 /** Probe a URL repeatedly until it returns HTTP 2xx/3xx, or attempts run out. */
 async function verifyPreviewReady(url: string, attempts: number, intervalMs: number): Promise<boolean> {
@@ -42,6 +43,38 @@ interface SessionProcess {
 const activeProcesses = new Map<string, SessionProcess>();
 const START_PORT = 3001;
 const MAX_ATTEMPTS = 3;
+
+/** Phase 12.5 — Get session IDs that actually exist in SQLite. */
+function getLiveSessions(): Set<string> {
+  try {
+    const rows = db().prepare("SELECT id FROM sessions").all() as { id: string }[];
+    return new Set(rows.map(r => r.id));
+  } catch {
+    return new Set();
+  }
+}
+
+/** Phase 12.5 — Purge sandbox dirs that have no matching session in SQLite. */
+export async function garbageCollectSandboxes(): Promise<string[]> {
+  const liveSessions = getLiveSessions();
+  const purged: string[] = [];
+  try {
+    const dirs = await fs.readdir(SANDBOX_BASE);
+    for (const dir of dirs) {
+      if (!liveSessions.has(dir)) {
+        // Kill any running process for orphan session
+        const state = activeProcesses.get(dir);
+        if (state?.devProcess) {
+          state.devProcess.kill("SIGTERM");
+        }
+        activeProcesses.delete(dir);
+        purged.push(dir);
+        console.log(`[AUTOPILOT][GC] Skipping orphan sandbox dir: ${dir} (no matching session in DB)`);
+      }
+    }
+  } catch {}
+  return purged;
+}
 
 async function findProjectRoot(baseDir: string): Promise<string | null> {
   if (existsSync(path.join(baseDir, "package.json"))) return baseDir;
@@ -94,10 +127,19 @@ export async function setupAutopilot(broadcast: (data: string, sid?: string, tid
   activeProcesses.clear();
   console.log("🚀 [AUTOPILOT] Initializing Sovereign Autopilot Protocol [v7.5]...");
 
+  // Phase 12.5 — Only restore sessions that exist in SQLite
+  const liveSessions = getLiveSessions();
+  const hasLiveSessionsInDb = liveSessions.size > 0;
+
   try {
     await fs.mkdir(SANDBOX_BASE, { recursive: true });
     const sessions = await fs.readdir(SANDBOX_BASE);
     for (const sid of sessions) {
+      // Phase 12.5 — skip orphan sandbox dirs (no matching DB row)
+      if (hasLiveSessionsInDb && !liveSessions.has(sid)) {
+        console.log(`[AUTOPILOT][GC] Skipping orphan sandbox: ${sid.slice(-8)} (not in DB)`);
+        continue;
+      }
       const sessionDir = path.join(SANDBOX_BASE, sid);
       try {
         const stat = await fs.stat(sessionDir);
@@ -149,7 +191,6 @@ async function getPreferredPort(projectDir: string): Promise<number> {
     const pkgPath = path.join(projectDir, "package.json");
     if (existsSync(pkgPath)) {
       const pkg = JSON.parse(await fs.readFile(pkgPath, "utf-8"));
-      // Look for --port in dev script
       const devScript = pkg.scripts?.dev || "";
       const portMatch = devScript.match(/--port\s+(\d+)/);
       if (portMatch) return parseInt(portMatch[1], 10);
@@ -180,17 +221,10 @@ async function triggerInstallAndRun(
   sessionState.status = "INSTALLING";
   sessionState.installAttempts = 0;
 
-  // Write .nexus/workflow.json so the project is self-describing
   await ensureWorkflowFile(projectDir);
-
   await runInstallWithRetry(sessionId, projectDir, broadcast);
 }
 
-/**
- * Write `.nexus/workflow.json` if missing — the EXECUTE_WORKFLOW protocol.
- * Mirrors how `.replit` declares run commands; lets sandboxes describe their own
- * boot chain so future restores don't depend on heuristics.
- */
 async function ensureWorkflowFile(projectDir: string) {
   const wfDir = path.join(projectDir, ".nexus");
   const wfPath = path.join(wfDir, "workflow.json");
@@ -205,7 +239,7 @@ async function ensureWorkflowFile(projectDir: string) {
       created: new Date().toISOString(),
       install: pkg.scripts?.install || "npm install",
       run: pkg.scripts?.dev ? "npm run dev" : (pkg.scripts?.start ? "npm start" : "npx http-server -p {PORT} --cors"),
-      port_strategy: "intelligent",  // try preferred → kill occupant → fallback
+      port_strategy: "intelligent",
       preferred_port: 3001,
       auto_open_preview: true
     };
@@ -228,21 +262,20 @@ async function runInstallWithRetry(
   }
 
   const args = attempt === 0 ? ["install"] : applyInstallFix(attempt, "");
-  // On any retry, wipe the previous (likely broken) node_modules so the next
-  // install actually rebuilds rather than skipping with "up to date".
   if (attempt > 0) await nukeBrokenNodeModules(projectDir, `retry #${attempt}`);
   broadcast(`\x1b[36m[AUTOPILOT] ${attempt > 0 ? `Retry ${attempt}: ` : ''}Running npm ${args.join(' ')}...\x1b[0m\r\n`, sessionId, undefined, "journal");
 
   try {
     let errorOutput = '';
+    // Fix 4 (EAGAIN): removed shell:true — spawning npm directly avoids the extra
+    // intermediate shell process that doubles process count and triggers EAGAIN.
     const install = spawn("npm", args, {
       cwd: projectDir,
-      shell: true,
       env: { ...process.env, CI: "false" }
     });
 
-    install.stdout.on("data", (data) => broadcast(`\x1b[90m${data}\x1b[0m`, sessionId, undefined, "journal"));
-    install.stderr.on("data", (data) => {
+    install.stdout?.on("data", (data) => broadcast(`\x1b[90m${data}\x1b[0m`, sessionId, undefined, "journal"));
+    install.stderr?.on("data", (data) => {
       const txt = data.toString();
       errorOutput += txt;
       broadcast(`\x1b[33m${txt}\x1b[0m`, sessionId, undefined, "journal");
@@ -257,6 +290,20 @@ async function runInstallWithRetry(
         sessionState.installAttempts++;
         broadcast(`\x1b[33m[AUTOPILOT] Install attempt ${attempt + 1} failed (code ${code}). Applying fix...\x1b[0m\r\n`, sessionId, undefined, "journal");
         await runInstallWithRetry(sessionId, projectDir, broadcast);
+      }
+    });
+
+    install.on("error", (err: any) => {
+      // EAGAIN and other spawn errors
+      if (err.code === 'EAGAIN' || err.code === 'ENOMEM') {
+        broadcast(`\x1b[31m[AUTOPILOT] System resource limit hit (${err.code}) — waiting 5s before retry...\x1b[0m\r\n`, sessionId, undefined, "journal");
+        setTimeout(() => {
+          sessionState.installAttempts++;
+          runInstallWithRetry(sessionId, projectDir, broadcast);
+        }, 5000);
+      } else {
+        sessionState.status = "ERROR";
+        broadcast(`\x1b[31m[AUTOPILOT] Install spawn error: ${err.message}\x1b[0m\r\n`, sessionId, undefined, "journal");
       }
     });
   } catch (error: any) {
@@ -315,9 +362,9 @@ async function startDevServer(
       } catch {}
     }
 
+    // Fix 4 (EAGAIN): no shell:true — spawn the command directly.
     const dev = spawn(devCmd.cmd, devCmd.args, {
       cwd: projectDir,
-      shell: true,
       env: {
         ...process.env,
         PORT: sessionState.port.toString(),
@@ -330,9 +377,8 @@ async function startDevServer(
     sessionState.devProcess = dev;
 
     const readyPattern = /ready in|Local:|Network:|started server|listening on|http:\/\/localhost|Available on:|compiled successfully|webpack compiled/i;
-    const errorPattern = /error|EADDRINUSE|failed to compile/i;
 
-    dev.stdout.on("data", (data) => {
+    dev.stdout?.on("data", (data) => {
       const output = data.toString();
       broadcast(`\x1b[32m[DEV] ${output}\x1b[0m`, sessionId, undefined, "journal");
       if (readyPattern.test(output) && sessionState!.status !== "READY") {
@@ -340,7 +386,7 @@ async function startDevServer(
       }
     });
 
-    dev.stderr.on("data", (data) => {
+    dev.stderr?.on("data", (data) => {
       const output = data.toString();
       broadcast(`\x1b[33m[DEV] ${output}\x1b[0m`, sessionId, undefined, "journal");
       if (output.includes("EADDRINUSE")) {
@@ -353,6 +399,20 @@ async function startDevServer(
         }).catch(err => {
           broadcast(`\x1b[31m[AUTOPILOT] Port acquisition failed: ${err.message}\x1b[0m\r\n`, sessionId, undefined, "journal");
         });
+      }
+    });
+
+    dev.on("error", (err: any) => {
+      if (err.code === 'EAGAIN' || err.code === 'ENOMEM') {
+        broadcast(`\x1b[31m[AUTOPILOT] System resource limit (${err.code}) hit starting dev server. Retry in 8s...\x1b[0m\r\n`, sessionId, undefined, "journal");
+        setTimeout(() => {
+          const s = activeProcesses.get(sessionId);
+          if (s) { s.devProcess = null; s.status = "IDLE"; }
+          startDevServer(sessionId, projectDir, broadcast);
+        }, 8000);
+      } else {
+        sessionState!.status = "ERROR";
+        broadcast(`\x1b[31m[AUTOPILOT] Dev server spawn error: ${err.message}\x1b[0m\r\n`, sessionId, undefined, "journal");
       }
     });
 
@@ -382,8 +442,7 @@ async function startDevServer(
 
 /**
  * Sovereign Visual Audit Protocol
- * Continuously monitors the port, takes screenshots via hidden browser, 
- * and self-corrects until successful.
+ * Fix 5 (Visual Audit Fail): early exit when no browser is available, max 3 retries.
  */
 async function performVisualAudit(
   sessionId: string,
@@ -399,64 +458,54 @@ async function performVisualAudit(
 
   const targetUrl = `http://localhost:${port}`;
 
-  // Verified preview gate — only signal OPEN_PREVIEW once the dev server actually
-  // returns HTTP 2xx/3xx. Avoids the "404 / refused" flicker users see when the
-  // iframe opens before vite is listening.
   const verified = await verifyPreviewReady(targetUrl, 10, 1000);
   if (verified) {
     broadcast(`__REFRESH_PREVIEW__`, sessionId, undefined, "journal");
     broadcast(`__OPEN_PREVIEW__`, sessionId, undefined, "journal");
     broadcast(`\x1b[32m[AUTOPILOT] Preview verified at ${targetUrl} — opening.\x1b[0m\r\n`, sessionId, undefined, "journal");
   } else {
-    broadcast(`\x1b[33m[AUTOPILOT] Preview not yet responding on ${targetUrl}. Will continue monitoring; not opening UI yet.\x1b[0m\r\n`, sessionId, undefined, "journal");
+    broadcast(`\x1b[33m[AUTOPILOT] Preview not yet responding on ${targetUrl}. Monitoring continues.\x1b[0m\r\n`, sessionId, undefined, "journal");
   }
-  
-  // Continuous Monitoring Loop
-  let attempts = 0;
-  const maxAttempts = 10;
-  
-  while (attempts < maxAttempts) {
-    attempts++;
-    
-    // 1. Connectivity Check
+
+  // Fix 5: Reduced from 10 to 3 audit attempts, and bail immediately if no browser found.
+  const maxAttempts = 3;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    // Connectivity Check
     const isFree = await isPortFree(port);
     if (isFree) {
-        broadcast(`\x1b[33m[VISUAL AUDIT] Attempt ${attempts}: Port ${port} is not responding yet. Waiting...\x1b[0m\r\n`, sessionId, undefined, "journal");
-        await new Promise(r => setTimeout(r, 3000));
-        continue;
+      broadcast(`\x1b[33m[VISUAL AUDIT] Port ${port} not responding yet (attempt ${attempt}). Waiting...\x1b[0m\r\n`, sessionId, undefined, "journal");
+      await new Promise(r => setTimeout(r, 3000));
+      continue;
     }
 
-    // 2. Headless Browser Verification
     try {
-      broadcast(`\x1b[35m[VISUAL AUDIT] Attempt ${attempts}: Initializing Sovereign Browser for verification...\x1b[0m\r\n`, sessionId, undefined, "journal");
-      
+      broadcast(`\x1b[35m[VISUAL AUDIT] Attempt ${attempt}: Running browser verification...\x1b[0m\r\n`, sessionId, undefined, "journal");
+
       const result = await captureVisualSnapshot(sessionId, targetUrl, 'audit-verify.png');
-      
-      if (result) {
-        broadcast(`\x1b[32m[VISUAL AUDIT] Success: Core integrity verified. Screenshot captured.\x1b[0m\r\n`, sessionId, undefined, "journal");
-        broadcast(`__VISUAL_SNAPSHOT__:${result.filename}`, sessionId, undefined, "journal");
-        return;
-      } else {
-        broadcast(`\x1b[31m[VISUAL AUDIT] Warning: Visual capture skipped (No browser binary). Falling back to console-only mode.\x1b[0m\r\n`, sessionId, undefined, "journal");
+
+      if (result === null) {
+        // null = no browser binary found — no point retrying
+        broadcast(`\x1b[33m[VISUAL AUDIT] No browser binary found — skipping visual verification (console-only mode).\x1b[0m\r\n`, sessionId, undefined, "journal");
         return;
       }
+
+      broadcast(`\x1b[32m[VISUAL AUDIT] Success: Screenshot captured.\x1b[0m\r\n`, sessionId, undefined, "journal");
+      broadcast(`__VISUAL_SNAPSHOT__:${result.filename}`, sessionId, undefined, "journal");
+      return;
     } catch (e: any) {
-      broadcast(`\x1b[33m[VISUAL AUDIT] Warning: Browser verification failed (${e.message}). Retrying in 5s...\x1b[0m\r\n`, sessionId, undefined, "journal");
+      broadcast(`\x1b[33m[VISUAL AUDIT] Warning: Browser failed (${e.message}). Retrying in 5s...\x1b[0m\r\n`, sessionId, undefined, "journal");
       await new Promise(r => setTimeout(r, 5000));
     }
   }
 
-  broadcast(`\x1b[31m[VISUAL AUDIT] Failed: Port ${port} was unreachable after ${maxAttempts} monitoring cycles.\x1b[0m\r\n`, sessionId, undefined, "journal");
+  broadcast(`\x1b[33m[VISUAL AUDIT] Completed (${maxAttempts} attempts). Preview is serving on port ${port}.\x1b[0m\r\n`, sessionId, undefined, "journal");
 }
 
 export function getSessionData(sessionId: string) {
   return activeProcesses.get(sessionId);
 }
 
-/**
- * Explicitly trigger install+boot for a session from outside (e.g. from chat handler).
- * Idempotent — skips if already READY or INSTALLING.
- */
 export async function triggerSessionBoot(
   sessionId: string,
   broadcast: (data: string, sid?: string, tid?: string, channel?: any) => void

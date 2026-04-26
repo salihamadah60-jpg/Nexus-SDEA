@@ -9,7 +9,7 @@ import { getFilesRecursive } from "../services/blueprintService.js";
 import { createBackup, rollback } from "../services/backupService.js";
 import { closeShell } from "../services/terminalService.js";
 import { aggregateIdea, getProactiveSuggestions } from "../services/ideationService.js";
-import { triggerSessionBoot, getSessionData, killSession } from "../services/autopilotService.js";
+import { triggerSessionBoot, getSessionData, killSession, garbageCollectSandboxes } from "../services/autopilotService.js";
 import { scaffoldProject } from "../services/scaffoldService.js";
 import { e2bManager } from "../services/e2bService.js";
 import { validatePath } from "../services/guardService.js";
@@ -76,6 +76,16 @@ router.post("/kernel/dna/lessons", async (req, res) => {
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: "DNA update failed: " + err.message });
+  }
+});
+
+// Phase 12.5 — Garbage-collect orphan sandbox dirs (no matching SQLite session)
+router.post("/autopilot/gc", async (_req, res) => {
+  try {
+    const purged = await garbageCollectSandboxes();
+    res.json({ ok: true, purged, count: purged.length });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 

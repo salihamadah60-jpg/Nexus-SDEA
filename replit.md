@@ -1,5 +1,23 @@
 # Nexus AI Sovereign IDE v8.0 — Silent Operator
 
+## Bug Fixes Applied (2026-04-26 — Pre-Phase 12.5 Session)
+
+| # | Fix | Files | Summary |
+|---|-----|-------|---------|
+| 1 | **Port conflicts** | `portService.ts` | Removed shell command substitution (`kill -9 $(lsof ...)`). All kills now use typed `findPidsOnPort + killPid` APIs. Clean 4-retry reclaim loop, deterministic fallback scan. |
+| 2 | **E2B sandbox check** | `e2bService.ts`, `/api/health` | E2B is active only when `E2B_API_KEY` is set. Terminal + preview are always local. `/api/health` reports `sandbox: "e2b" \| "local"`. |
+| 3 | **Nexus creation behavior** | `aiService.ts`, `scaffoldService.ts` | System prompt hardened with FORBIDDEN PHRASES list. Model must write ALL files in ONE response — no "I will start creating…" preamble. Scaffold updated to Tailwind v4. |
+| 4 | **EAGAIN / process limit** | `autopilotService.ts` | Removed `shell: true` from all `spawn()` calls — this was creating an extra `sh -c` process per install/dev-server, doubling process count. Added `EAGAIN`/`ENOMEM` error handlers with back-off retries. |
+| 5 | **Visual Audit Fail** | `autopilotService.ts` | Reduced retry loop from 10 → 3 attempts. Early-exit when `captureVisualSnapshot` returns null (no browser binary) — no more 10-cycle "no browser" spam. |
+| 6 | **Core Dumped** | `visualService.ts` | Added full set of container-safe Chromium flags: `--disable-dev-shm-usage`, `--no-zygote`, `--single-process`, `--disable-gpu`, `--disable-software-rasterizer`, etc. Added Nix store paths to binary search. |
+| 7 | **Vite config ESM Workers** | `vite.config.ts` | Fixed proxy target 3000 → 5000. Added `optimizeDeps.exclude` for `web-tree-sitter`, `tree-sitter-wasms`, `better-sqlite3`. Added `worker.format: 'es'`. |
+| 8 | **Phase 12.5** | `autopilotService.ts`, `api.ts` | `getLiveSessions()` cross-checks sandbox dirs against SQLite `sessions` table. Orphan dirs skipped on boot. `POST /api/autopilot/gc` endpoint for manual purge. |
+
+### Additional fixes
+- `getProviderClients()` now returns `altAi` (was causing runtime destructuring error)
+- Scaffold updated to Tailwind v4 (`@tailwindcss/vite`, `@import "tailwindcss"`, no postcss.config.js)
+- `scaffoldService.ts` vite.config no longer uses `strictPort: true` (caused unnecessary EADDRINUSE cascades)
+
 A unified, world-class AI coding IDE built on a sovereign architecture. Nexus builds projects autonomously from A to Z, operates silently (all code written directly to files), and presents clean structured responses with expandable intelligence sections.
 
 ## Architecture

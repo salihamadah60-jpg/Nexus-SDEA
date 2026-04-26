@@ -61,8 +61,10 @@ function getProviderClients(overrides: { [key: string]: string | undefined } = {
   const GEMINI_API_KEY = (overrides.GEMINI_API_KEY || process.env.GEMINI_API_KEY)?.trim();
   const GITHUB_TOKEN = (overrides.GITHUB_TOKEN || overrides.GITHUB_GPT || process.env.GITHUB_GPT || process.env.GITHUB_TOKEN)?.trim();
   const HUGGINGFACE_TOKEN = (overrides.HUGGINGFACE_TOKEN || process.env.HUGGINGFACE_TOKEN)?.trim();
+  const geminiClient = GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null;
   return {
-    ai: GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null,
+    ai: geminiClient,
+    altAi: geminiClient, // secondary slot reuses same Gemini client (key-pool handles rotation)
     github: GITHUB_TOKEN ? new OpenAI({ apiKey: GITHUB_TOKEN, baseURL: "https://models.inference.ai.azure.com" }) : null,
     groq: GROQ_API_KEY ? new OpenAI({ apiKey: GROQ_API_KEY, baseURL: "https://api.groq.com/openai/v1" }) : null,
     hf: HUGGINGFACE_TOKEN ? new HfInference(HUGGINGFACE_TOKEN) : null,
@@ -354,18 +356,30 @@ STACK PREFERENCES (Phase 12.3 — non-negotiable defaults):
 • Never hand-write a postcss.config.js for Tailwind v4 (the Vite plugin replaces it).
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-INTENT INFERENCE — DIRECT EXECUTION (CRITICAL):
+INTENT INFERENCE — DIRECT EXECUTION (ABSOLUTE LAW):
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-The user does NOT need to say "create app" or "build app". When they describe ANY product
-(a calculator, dashboard, game, tracker, portfolio, landing page, todo, chart, etc.) you must
-INFER they want it BUILT and start building IMMEDIATELY. No confirmation question.
+When the user describes ANY product, site, app, or component — YOU BUILD IT NOW IN THIS RESPONSE.
+Do NOT say "I will start creating..." or "Let me plan..." or "I'll set up...".
+Do NOT ask for confirmation. Do NOT say "Should I create an app?"
+Do NOT split the build across multiple responses. ALL files go in THIS single response.
+
+FORBIDDEN PHRASES (these mean you failed):
+  ✗ "I will start creating the main files"
+  ✗ "Let me set up the project structure"
+  ✗ "I'll begin by planning"
+  ✗ "Should I go ahead and build this?"
+  ✗ "I'm going to create..." [without immediately doing so]
+
+CORRECT BEHAVIOR: Your FIRST action is writing [NEXUS:FILE:package.json] followed immediately
+by ALL other files. No preamble. No planning text before the files.
+
 Examples:
-  • "a glassmorphism dashboard"          → BUILD it now
-  • "habit tracker with streaks"         → BUILD it now
-  • "make me something cool with charts" → BUILD it now (pick D3 + React)
-  • "I need a way to track my workouts"  → BUILD a workout tracker now
-The ONLY time to ask first is genuine ambiguity (two equally-valid stacks). Otherwise: act.
-Never reply with "Should I create an app for this?" — just create it.
+  • "a glassmorphism dashboard"        → Write all 7+ files NOW in this response
+  • "website with modern CSS"          → Write complete index.html, CSS, JS NOW
+  • "habit tracker with streaks"       → Write full React app with all components NOW
+  • "create a landing page"            → Write every file, beautifully styled, NOW
+The ONLY time to ask first: two truly equal stacks AND the choice fundamentally changes the output.
+Otherwise: act now, ask nothing.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PORT PROTOCOL (CRITICAL):
@@ -439,9 +453,12 @@ The system auto-scaffolds missing files as a fallback, but YOU must write comple
 FOR EXISTING PROJECTS: Read relevant files first, then make surgical modifications.
 
 VITE REACT TEMPLATE (use this exact structure for ALL React projects):
-package.json scripts: { "dev": "vite --host 0.0.0.0", "build": "vite build" }
-Dependencies: { "react": "^18.2.0", "react-dom": "^18.2.0" }
-DevDependencies: { "@vitejs/plugin-react": "^4.2.1", "vite": "^5.2.0", "typescript": "~5.2.2", "@types/react": "^18.2.67", "@types/react-dom": "^18.2.22" }
+package.json scripts: { "dev": "vite --host 0.0.0.0", "build": "tsc && vite build" }
+Dependencies: { "react": "^18.3.1", "react-dom": "^18.3.1", "framer-motion": "^11.3.19", "lucide-react": "^0.363.0", "clsx": "^2.1.0", "tailwind-merge": "^2.2.2" }
+DevDependencies: { "@vitejs/plugin-react": "^4.2.1", "vite": "^6.2.0", "typescript": "~5.4.0", "@types/react": "^18.2.67", "@types/react-dom": "^18.2.22", "tailwindcss": "^4.0.0", "@tailwindcss/vite": "^4.0.0" }
+vite.config.ts: import tailwindcss from "@tailwindcss/vite"; plugins: [react(), tailwindcss()] — NO postcss.config.js needed.
+src/index.css: ONLY @import "tailwindcss"; — NO @tailwind base/components/utilities directives.
+server port in vite.config: Number(process.env.PORT) || 3001 — NEVER hardcode 5000.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SANDBOX & PATHS:

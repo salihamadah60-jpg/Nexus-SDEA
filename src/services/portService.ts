@@ -5,7 +5,11 @@
  *   1. Reserved-port enforcement (Nexus's own port is never given to a project)
  *   2. Free-port testing via raw TCP bind
  *   3. OS-aware process discovery (lsof on Linux/macOS, netstat on Windows)
- *   4. Optional kill-and-reuse, with fallback to next free port
+ *   4. Deterministic kill-and-reuse, with clean fallback to next free port
+ *
+ * Fix 1 (Port Conflict): Removed `shell: true` and `kill -9 $(lsof ...)` command
+ * substitution (which creates extra shell processes and is fragile). All kills now
+ * go through the typed findPidsOnPort + killPid path.
  *
  * Read by: autopilotService.ts, server.ts
  */
@@ -17,7 +21,6 @@ import os from "os";
 const execAsync = promisify(exec);
 
 // Ports that Nexus itself uses — projects must NEVER bind these.
-// Updated dynamically when Nexus boots (see registerNexusPort below).
 const RESERVED_PORTS = new Set<number>([5000]);
 
 export function registerNexusPort(port: number) {
@@ -55,20 +58,17 @@ export async function findPidsOnPort(port: number): Promise<number[]> {
         if (m) pids.add(parseInt(m[1], 10));
       });
     } else {
-      // Linux / macOS — aggregate from multiple tools
+      // Linux / macOS — try multiple tools, each with individual error isolation
       const commands = [
-        `lsof -t -i:${port}`, // Broader than -sTCP:LISTEN
-        `fuser ${port}/tcp 2>/dev/null`,
-        `ss -lptn 'sport = :${port}' | grep -oP 'pid=\\K\\d+'`,
-        `netstat -lptn | grep :${port} | awk '{print $7}' | cut -d/ -f1`
+        `lsof -t -i:${port} 2>/dev/null`,
+        `ss -lptn sport = :${port} 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2`,
       ];
-
       for (const cmd of commands) {
         try {
-          const { stdout } = await execAsync(cmd);
+          const { stdout } = await execAsync(cmd, { timeout: 3000 });
           stdout.split(/[\s\n\r]+/).filter(Boolean).forEach(s => {
             const n = parseInt(s, 10);
-            if (!isNaN(n)) pids.add(n);
+            if (!isNaN(n) && n > 1) pids.add(n);
           });
         } catch {}
       }
@@ -80,14 +80,16 @@ export async function findPidsOnPort(port: number): Promise<number[]> {
   return Array.from(pids).filter(p => p > 0);
 }
 
-/** Kill a PID. Cross-platform. */
+/** Kill a PID using process.kill (no shell spawning). */
 export async function killPid(pid: number): Promise<boolean> {
+  if (pid === process.pid) return false; // never kill ourselves
   try {
     if (os.platform() === "win32") {
       await execAsync(`taskkill /F /PID ${pid}`);
     } else {
+      // SIGTERM first, then SIGKILL — no shell spawning
       try { process.kill(pid, "SIGTERM"); } catch {}
-      await new Promise(r => setTimeout(r, 400));
+      await new Promise(r => setTimeout(r, 500));
       try { process.kill(pid, "SIGKILL"); } catch {}
     }
     return true;
@@ -98,89 +100,59 @@ export async function killPid(pid: number): Promise<boolean> {
  * Acquire a usable port for a sandbox project.
  *
  * Strategy:
- *  1. If preferredPort is reserved, jump straight to fallback.
- *  2. If preferredPort is free, return it.
- *  3. If preferredPort is busy and `killOccupant` is true, identify+kill the holder
- *     and retry. If still busy, fall back.
- *  4. Fallback: scan upward, skipping reserved ports, until a free one is found.
+ *  1. If preferredPort is reserved, jump straight to fallback scan.
+ *  2. If preferredPort is free, return it immediately.
+ *  3. If preferredPort is busy and killOccupant=true, find+kill occupants (up to 4 retries).
+ *     Each retry waits a bit longer. Uses typed APIs only — no shell command substitution.
+ *  4. Fallback: scan upward from preferredPort+1, skipping reserved ports.
  */
 export async function acquirePort(opts: {
   preferred: number;
   killOccupant?: boolean;
   maxScan?: number;
-  stubbornForce?: boolean; // New: If true, will NOT fall back to next port unless preferred is reserved
 }): Promise<{ port: number; action: "preferred" | "killed-and-reused" | "fallback" }> {
   const preferred = opts.preferred;
   const killOccupant = opts.killOccupant ?? true;
-  const maxScan = opts.maxScan ?? 100;
-  const stubbornForce = opts.stubbornForce ?? true;
+  const maxScan = opts.maxScan ?? 150;
 
-  if (!isReserved(preferred) && await isPortFree(preferred)) {
+  // Step 1: Reserved port — never give it to a project
+  if (isReserved(preferred)) {
+    console.warn(`[PORT] Port ${preferred} is reserved by Nexus — scanning for fallback.`);
+  } else if (await isPortFree(preferred)) {
     return { port: preferred, action: "preferred" };
-  }
+  } else if (killOccupant) {
+    // Step 3: Attempt to reclaim preferred port
+    for (let retry = 0; retry < 4; retry++) {
+      const pids = (await findPidsOnPort(preferred)).filter(p => p !== process.pid);
 
-  if (!isReserved(preferred) && killOccupant) {
-    for (let retry = 0; retry < 5; retry++) {
-      let pids = await findPidsOnPort(preferred);
-      
-      if (pids.length === 0) {
-        if (await isPortFree(preferred)) {
-          return { port: preferred, action: "preferred" };
-        }
-        // Port is busy but no PIDs found. Try a panic kill via fuser if on Linux.
-        if (os.platform() !== "win32" && retry > 1) {
-          try { await execAsync(`fuser -k -n tcp ${preferred} 2>/dev/null`); } catch {}
-          await new Promise(r => setTimeout(r, 1000));
-        }
+      if (pids.length > 0) {
+        console.log(`[PORT] Clearing port ${preferred}: killing PIDs ${pids.join(", ")} (attempt ${retry + 1}/4)`);
+        for (const pid of pids) await killPid(pid);
+      } else {
+        // No PIDs found but port still busy — wait a moment for the OS to release it
+        console.log(`[PORT] Port ${preferred} busy but no PIDs found — waiting for OS release (attempt ${retry + 1}/4)`);
       }
-      
-      const safePids = pids.filter(p => p !== process.pid);
-      if (safePids.length > 0) {
-        console.log(`[PORT] Stubbornly clearing port ${preferred}. Killing PIDs: ${safePids.join(", ")}`);
-        for (const pid of safePids) await killPid(pid);
-        await new Promise(r => setTimeout(r, 1200 + (retry * 500)));
-      }
-      
+
+      await new Promise(r => setTimeout(r, 800 + retry * 600));
+
       if (await isPortFree(preferred)) {
         return { port: preferred, action: "killed-and-reused" };
       }
     }
-    
-    if (stubbornForce) {
-        console.warn(`[PORT] Reclamation failed for port ${preferred}. STUBBORN_FORCE is active - retrying PID purge...`);
-        // Final attempt: recursive grep and kill if tools failed
-        try {
-            await execAsync(`kill -9 $(lsof -t -i:${preferred}) || true`);
-            await new Promise(r => setTimeout(r, 2000));
-            if (await isPortFree(preferred)) return { port: preferred, action: "killed-and-reused" };
-        } catch {}
-    } else {
-        console.warn(`⚠️ Stubborn reuse failed for port ${preferred} after 5 attempts.`);
+    console.warn(`[PORT] Could not reclaim port ${preferred} after 4 attempts — falling back to next free port.`);
+  }
+
+  // Step 4: Fallback scan — deterministic, skips reserved ports
+  for (let i = 1; i <= maxScan; i++) {
+    const candidate = preferred + i;
+    if (isReserved(candidate)) continue;
+    if (await isPortFree(candidate)) {
+      console.log(`[PORT] Fallback: assigned port ${candidate} (preferred ${preferred} unavailable).`);
+      return { port: candidate, action: "fallback" };
     }
   }
 
-  // Fallback scan only as a last resort OR if stubbornForce is false
-  if (!stubbornForce) {
-    for (let i = 1; i <= maxScan; i++) {
-        const candidate = preferred + i;
-        if (isReserved(candidate)) continue;
-        if (await isPortFree(candidate)) {
-          return { port: candidate, action: "fallback" };
-        }
-      }
-  }
-  
-  // Even with stubbornForce, fall back to scanning for a free port instead of crashing the host process.
-  if (stubbornForce && !await isPortFree(preferred)) {
-    console.warn(`[PORT] Reclamation gave up on port ${preferred}. Falling back to next free port.`);
-    for (let i = 1; i <= maxScan; i++) {
-      const candidate = preferred + i;
-      if (isReserved(candidate)) continue;
-      if (await isPortFree(candidate)) {
-        return { port: candidate, action: "fallback" };
-      }
-    }
-  }
-
+  // Last resort: return preferred and let the caller handle EADDRINUSE
+  console.error(`[PORT] No free port found in ${preferred}..${preferred + maxScan} range. Returning preferred (may cause EADDRINUSE).`);
   return { port: preferred, action: "preferred" };
 }

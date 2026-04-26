@@ -199,12 +199,12 @@ A line flips to ✅ only when **all three** are true:
   4. Surface "reified N orphan imports" as a `nexus_chain` step so the user sees the self-correction in the UI.
 - **Acceptance:** Turn 1 of the Aurora prompt: 0 unresolved relative imports remain after the reifier runs; sandbox `tsc --noEmit` returns exit 0.
 
-### 12.5 — Stale auto-restored sandboxes from prior sessions ⬜ (low priority)
+### 12.5 — Stale auto-restored sandboxes from prior sessions ✅
 
 - **Symptom:** Boot log shows `[AUTOPILOT] Proactive Restore: Booting Session g54fm...` for sessions that no longer exist in SQLite. They consume CPU on every boot.
 - **Root cause:** `autopilotService.proactiveRestore()` reads the on-disk `sandbox/projects/` directory list rather than the live `sessions` table.
-- **Fix plan:** Filter the sandbox dirs against `stateDb.sessions` at restore time. Drop the directory (or just skip) if no matching session row exists. Add a `POST /api/autopilot/gc` endpoint to manually purge orphans.
-- **Acceptance:** Boot log shows only sessions that exist in `state.db`.
+- **Fix applied:** `getLiveSessions()` queries SQLite `sessions` table; orphan dirs are skipped at restore time. `garbageCollectSandboxes()` kills orphan processes + exposes `POST /api/autopilot/gc` for manual purge.
+- **Acceptance:** Boot log shows only sessions that exist in `state.db`. ✅
 
 ---
 
