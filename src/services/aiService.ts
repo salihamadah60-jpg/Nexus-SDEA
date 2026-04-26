@@ -1057,12 +1057,35 @@ export function createChatHandler(broadcast: (data: string, sid?: string) => voi
     if (sandboxPath && parsed.terminals.length > 0) {
       send({ nexus_streaming: true, status: `Executing ${parsed.terminals.length} command(s)...` });
       
-      // Phase 8: Dependency Audit Gate
+      // Phase 8: Dependency Audit Gate — real npm audit run
       const installCmd = parsed.terminals.find(c => c.includes('npm install'));
-      if (installCmd) {
-        send({ nexus_streaming: true, status: 'Dependency Audit Gate: Scanning for malicious injection...' });
-        // Simulation of npm audit / security scan
-        await new Promise(r => setTimeout(r, 800)); 
+      if (installCmd && sandboxPath) {
+        send({ nexus_streaming: true, status: 'Dependency Audit Gate: Running npm audit scan...' });
+        try {
+          // Run audit only if package.json already exists (i.e. a project is staged)
+          const pkgExists = await fs.access(path.join(sandboxPath, 'package.json')).then(() => true).catch(() => false);
+          if (pkgExists) {
+            const auditResult = await execCommandInSandbox('npm audit --json --audit-level=high 2>/dev/null || true', sandboxPath, 15000);
+            try {
+              const auditJson = JSON.parse(auditResult.stdout || '{}');
+              const vulns: any = auditJson.vulnerabilities || {};
+              const criticalOrHigh = Object.values(vulns).filter((v: any) => v.severity === 'critical' || v.severity === 'high');
+              if (criticalOrHigh.length > 0) {
+                const names = criticalOrHigh.map((v: any) => `${v.name}(${v.severity})`).slice(0, 5).join(', ');
+                send({ nexus_streaming: true, status: `Dependency Audit Gate: ⚠ ${criticalOrHigh.length} high/critical vuln(s) detected — ${names}. Proceeding with install.` });
+              } else {
+                send({ nexus_streaming: true, status: 'Dependency Audit Gate: No high/critical vulnerabilities found.' });
+              }
+            } catch {
+              // audit output not parseable (e.g. lockfile not yet generated) — no-op
+              send({ nexus_streaming: true, status: 'Dependency Audit Gate: Audit pre-check skipped (lockfile not yet staged).' });
+            }
+          } else {
+            send({ nexus_streaming: true, status: 'Dependency Audit Gate: Package manifest not yet present — audit deferred to post-install.' });
+          }
+        } catch {
+          send({ nexus_streaming: true, status: 'Dependency Audit Gate: Scan skipped (sandbox not ready).' });
+        }
       }
 
       // Phase 12.3 — make sure the scaffolder has finished laying out the
