@@ -1,4 +1,4 @@
-# Nexus AI Sovereign IDE v7.0 — Silent Operator
+# Nexus AI Sovereign IDE v8.0 — Silent Operator
 
 A unified, world-class AI coding IDE built on a sovereign architecture. Nexus builds projects autonomously from A to Z, operates silently (all code written directly to files), and presents clean structured responses with expandable intelligence sections.
 
@@ -158,7 +158,7 @@ Each session gets a fully isolated sandbox:
 
 - **Runtime:** Node.js 20 + TypeScript (tsx for dev)
 - **Frontend:** React 18, Tailwind v4, motion/react, lucide-react
-- **AI Providers:** Gemini 2.5 Flash → Gemini Alt → GitHub GPT-4o → Groq → HuggingFace
+- **AI Providers:** Gemini 2.5 Flash Preview → Gemini 2.0 Flash → Gemini 2.0 Flash Lite → GitHub GPT-4o → Groq Llama-3.3-70B → HuggingFace Llama-3.2
 - **Editor:** @uiw/react-codemirror + CodeMirror language extensions
 - **Color Palette:** `#d4af37` (Nexus Gold), `#00f2ff` (Nexus Cyan), `#050508` (Deep Black)
 

@@ -245,9 +245,14 @@ router.post("/kernel/env-keys/sweep", async (_req, res) => {
 router.post("/checkpoints/create", async (req, res) => {
   const { sessionId, description } = req.body || {};
   if (!sessionId) return res.status(400).json({ error: "sessionId required" });
-  const id = await createCheckpoint(sessionId, description || "manual");
-  if (!id) return res.status(500).json({ error: "checkpoint failed" });
-  res.json({ id });
+  try {
+    const id = await createCheckpoint(sessionId, description || "manual");
+    if (!id) return res.status(400).json({ error: "checkpoint skipped — sandbox not yet initialised for this session" });
+    res.json({ id });
+  } catch (e: any) {
+    log.error(`checkpoint create: ${e?.message}`);
+    res.status(500).json({ error: e?.message || "checkpoint failed" });
+  }
 });
 router.get("/checkpoints/:sessionId", (req, res) => {
   res.json({ checkpoints: listCheckpoints(req.params.sessionId) });

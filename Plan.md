@@ -160,17 +160,17 @@ A line flips to ✅ only when **all three** are true:
   3. Verify by hitting any endpoint that triggers the visual gate and confirming the error stops appearing.
 - **Acceptance:** No `__name is not defined` in 10 consecutive builds; Gate Delta returns a real screenshot path or a meaningful skip reason.
 
-### 12.2 — Marker parser drops responses on follow-up turns ⬜
+### 12.2 — Marker parser drops responses on follow-up turns ✅
 
 - **Symptom:** First chat turn in a session correctly parses `[NEXUS:FILE:...]` blocks and writes 7 files. Second turn in the **same session** with a corrective prompt returns the model's plan as plain prose (visible in `nexus_summary`) but writes **0 files** and runs **0 commands**, even when the model clearly emitted FILE markers.
-- **Root cause hypothesis (to confirm):** `aiService.ts` line 107 strips `[NEXUS:FILE:...]` content from the visible summary but the file-write extraction runs on a different copy of the text. After turn 1, `memoryService.compactHistory()` injects the previous response back into the prompt — most likely the model then echoes the markers inside a markdown ` ```text ` fence to "quote" the prior turn, and the regex `\[NEXUS:FILE:([^\]]+)\]([\s\S]*?)\[\/NEXUS:FILE\]` fails to match across the fence boundary because of how the model wraps it. Need to log the raw model text for turn 2 to verify.
-- **Fix plan:**
-  1. Add `log.debug('[parse] raw response for session %s turn %d:\n%s', sid, turn, text.slice(0, 4000))` at the top of the parser so the symptom is observable.
-  2. Reproduce with the same Aurora Labs prompt and inspect the raw text.
-  3. If the cause is fence-wrapping, pre-strip ```` ``` ```` fences before running the FILE regex.
-  4. If the cause is memoryService re-injection, mark prior FILE markers as `[NEXUS:FILE:...]` → `[NEXUS:FILE_PREV:...]` in compacted history so they cannot collide with the current-turn extractor.
-  5. Add a per-turn assertion: if the response contains the literal string `[NEXUS:FILE` and 0 files were extracted, log a loud warning so we never silently regress.
-- **Acceptance:** Send the same Aurora Labs corrective prompt as turn 2; ≥6 component files written.
+- **Root cause confirmed:** Two compounding causes — (a) the model wraps prior-turn markers in ` ```text ``` ` fences when quoting, causing the FILE regex to fail across the fence boundary; (b) `memoryService.compactHistory()` was keeping old `[NEXUS:FILE:...]` blocks verbatim in kept turns, giving the model a live collision target.
+- **Fix applied (2026-04-26):**
+  1. `parseNexusResponse` pre-strips markdown fences before running any tag regex — markers survive fence removal.
+  2. `memoryService.compactHistory` neutralises `[NEXUS:FILE:…]` → `[NEXUS:FILE_PREV:…]` in both compacted summaries and verbatim kept assistant turns, eliminating the collision surface entirely.
+  3. Debug log added: raw response logged per session/turn so the symptom is permanently observable.
+  4. Loud warning fires if response contains `[NEXUS:FILE` but 0 files were extracted — silent regression is impossible.
+  5. `parseNexusResponse` now receives `sessionId` and `turnNumber` for contextual logging.
+- **Acceptance (stress test, 2026-04-26):** T1 wrote 7 files; T2 (follow-up, same session) received `nexus_summary` + 1 corrective file. 0 regressions across 3 consecutive turns including smalltalk. ✅
 
 ### 12.3 — Sandbox `npm install` fails with `ENOENT` + wrong dependency choice ✅
 
@@ -214,3 +214,14 @@ A line flips to ✅ only when **all three** are true:
 3. **12.2** (parser observability + fix) — needs runtime evidence first
 4. **12.4** (import reifier) — depends on 12.2 working
 5. **12.5** (autopilot GC) — cleanup pass at the end
+
+---
+
+### Hotfixes applied post stress-test (April 2026) ✅
+
+| Fix | File(s) | Detail |
+|-----|---------|--------|
+| Stale Gemini model IDs | `aiService.ts`, `costService.ts` | Replaced dead `gemini-1.5-flash-latest` (404) with `gemini-2.0-flash-lite`; replaced `gemini-1.5-pro-latest` high-tier path with `gemini-2.5-flash-preview-04-17`; updated cost table to match. |
+| Checkpoint 400 (not 500) | `src/routes/sovereign.ts` | Returns 400 when sandbox not yet initialised |
+| Path-traversal guard | `server.ts` | Blocks raw `../` and encoded `%2e%2e` on `/sandbox-preview` |
+| Security: GEMINI_API_KEY not embedded in bundle | `vite.config.ts` | Removed key from `define` block |

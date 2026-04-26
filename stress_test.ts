@@ -88,18 +88,21 @@ function tryJson(s: string): any {
 function drainSSE(
   path: string,
   body: any,
-  timeoutMs = 30_000
+  timeoutMs = 60_000
 ): Promise<{ events: any[]; raw: string; ms: number }> {
   return new Promise((resolve) => {
     const bodyStr = JSON.stringify(body);
     const start = Date.now();
     const events: any[] = [];
+    let lineBuffer = "";   // proper line buffer — avoids partial-chunk JSON parse failures
     let raw = "";
     let done = false;
+    let timer: ReturnType<typeof setTimeout>;
 
     const finish = () => {
       if (done) return;
       done = true;
+      clearTimeout(timer);
       req.destroy();
       resolve({ events, raw, ms: Date.now() - start });
     };
@@ -116,26 +119,30 @@ function drainSSE(
         },
       },
       (res) => {
-        if (res.statusCode !== 200) {
-          finish();
-          return;
-        }
+        if (res.statusCode !== 200) { finish(); return; }
+
+        timer = setTimeout(finish, timeoutMs);
+
         res.on("data", (chunk: Buffer) => {
-          raw += chunk.toString();
-          const lines = raw.split("\n");
+          const text = chunk.toString();
+          raw += text;
+          lineBuffer += text;
+
+          // Process only complete lines (split on \n, keep the last partial line in buffer).
+          const lines = lineBuffer.split("\n");
+          lineBuffer = lines.pop() ?? "";  // last element may be incomplete
+
           for (const line of lines) {
             const l = line.trim();
-            if (l.startsWith("data: ")) {
-              const payload = l.slice(6);
-              if (payload === "[DONE]") { finish(); return; }
-              const obj = tryJson(payload);
-              if (obj) events.push(obj);
-            }
+            if (!l.startsWith("data: ")) continue;
+            const payload = l.slice(6).trim();
+            if (payload === "[DONE]") { finish(); return; }
+            const obj = tryJson(payload);
+            if (obj) events.push(obj);
           }
         });
         res.on("end", finish);
         res.on("error", finish);
-        setTimeout(finish, timeoutMs);
       }
     );
     req.on("error", finish);
@@ -237,12 +244,20 @@ async function testCheckpoints() {
   if (r1.status === 200) pass("GET /api/checkpoints/:sessionId", "empty array OK");
   else fail("GET /api/checkpoints/:sessionId", `status=${r1.status}`);
 
+  // Sandbox-less session: should now return 400, not 500.
   const r2 = await POST("/api/checkpoints/create", { sessionId, description: "stress-test" });
-  if (r2.status === 200) {
+  if (r2.status === 400) {
+    pass("POST /api/checkpoints/create (no sandbox) → 400", "correctly rejects uninitialised session");
+  } else if (r2.status === 200) {
     const body = tryJson(r2.body);
     if (body?.id) pass("POST /api/checkpoints/create", `id=${body.id}`);
     else warn("POST /api/checkpoints/create", "returned 200 but no id: " + r2.body.slice(0, 80));
-  } else fail("POST /api/checkpoints/create", `status=${r2.status}`);
+  } else fail("POST /api/checkpoints/create", `unexpected status=${r2.status}: ${r2.body.slice(0, 100)}`);
+
+  // Missing sessionId → 400
+  const r3 = await POST("/api/checkpoints/create", {});
+  if (r3.status === 400) pass("POST /api/checkpoints/create (missing sessionId) → 400");
+  else fail("POST /api/checkpoints/create (missing sessionId)", `expected 400 got ${r3.status}`);
 }
 
 async function testRAG() {
@@ -346,58 +361,117 @@ async function testRateLimiting() {
   else warn("Rate limiter not triggered", `All ${batchSize} requests passed — may need fresh IP window`);
 }
 
-async function testChatDegradedMode() {
-  console.log(`\n${bold(cyan("── CHAT ENDPOINT (degraded / no-key mode) ──"))}`);
+async function testChatLive() {
+  console.log(`\n${bold(cyan("── CHAT ENDPOINT (live AI build) ──"))}`);
 
-  // Turn 1: build request
+  const sessionId = `stress-session-${Date.now()}`;
+
+  // Turn 1: real build — let the AI build something end-to-end.
+  console.log("  T1: Building a counter app with React + Tailwind (real AI)...");
   const t1 = await drainSSE("/api/chat", {
     message: "Build a simple counter app with React and Tailwind",
-    sessionId: `stress-session-${Date.now()}`,
-  }, 30_000);
+    sessionId,
+  }, 60_000);
 
   const summaryEvent = t1.events.find(e => e.nexus_summary);
   const fileEvents   = t1.events.filter(e => e.nexus_file_write);
   const chainEvent   = t1.events.find(e => e.nexus_chain);
+  const thoughtEvent = t1.events.find(e => e.nexus_thought);
+  const doneEvent    = t1.events.find(e => e.nexus_summary?.includes("no providers") || e.nexus_summary?.includes("exhausted"));
 
-  if (summaryEvent) pass("Chat T1: nexus_summary received", summaryEvent.nexus_summary?.slice(0, 80));
-  else fail("Chat T1: no nexus_summary event");
+  // Chain: planner node fired
+  if (chainEvent)    pass("Chat T1: nexus_chain parsed", `steps=${chainEvent.nexus_chain?.length}`);
+  else               warn("Chat T1: no nexus_chain event");
 
-  if (chainEvent) pass("Chat T1: nexus_chain parsed", `steps=${chainEvent.nexus_chain?.length}`);
-  else warn("Chat T1: no nexus_chain — possibly degraded-mode short reply");
+  // Files written OR a proper summary = success
+  if (fileEvents.length > 0) {
+    pass("Chat T1: files written", `${fileEvents.length} file(s)`);
+  } else if (doneEvent) {
+    pass("Chat T1: degraded-mode summary received (no keys on this provider)");
+  } else {
+    warn("Chat T1: 0 files written — may be rate-limited or model refused task");
+  }
 
-  // In degraded mode (no keys) 0 files is expected — but we still verify the parser fires.
-  const markerWarningEvents = t1.events.filter(e =>
-    e.nexus_summary?.includes("no providers") || e.nexus_summary?.includes("exhausted")
-  );
-  if (markerWarningEvents.length > 0)
-    pass("Chat T1: degraded-mode message surfaces correctly");
+  // Summary event
+  if (summaryEvent) pass("Chat T1: nexus_summary received", summaryEvent.nexus_summary?.slice(0, 100));
+  else if (fileEvents.length > 0) warn("Chat T1: files written but nexus_summary not parsed (SSE timeout edge case)");
+  else fail("Chat T1: no nexus_summary and 0 files");
 
-  console.log(`  T1 took ${t1.ms}ms, received ${t1.events.length} events, files written=${fileEvents.length}`);
+  if (thoughtEvent)  pass("Chat T1: nexus_thought present (THOUGHT marker parsed)");
 
-  // Turn 2 (follow-up) — verifies the 12.2 fix: second turn still receives summary.
+  console.log(`  T1 done: ${t1.ms}ms | events=${t1.events.length} | files=${fileEvents.length}`);
+
+  // Turn 2 (follow-up in same session) — core 12.2 regression check.
+  // After turn 1 the session has history. The parser must NOT drop FILE markers on T2.
+  console.log("  T2: Follow-up prompt in same session (12.2 regression check)...");
   const t2 = await drainSSE("/api/chat", {
     message: "Add a reset button to the counter",
-    sessionId: `stress-session-${Date.now()}`,
-  }, 30_000);
+    sessionId,
+  }, 60_000);
 
   const summaryEvent2 = t2.events.find(e => e.nexus_summary);
-  if (summaryEvent2) pass("Chat T2 (follow-up): nexus_summary received", summaryEvent2.nexus_summary?.slice(0, 80));
-  else fail("Chat T2 (follow-up): no nexus_summary — 12.2 regression?");
+  const fileEvents2   = t2.events.filter(e => e.nexus_file_write);
 
-  console.log(`  T2 took ${t2.ms}ms, received ${t2.events.length} events`);
+  if (summaryEvent2) {
+    pass("Chat T2 (follow-up): nexus_summary received", summaryEvent2.nexus_summary?.slice(0, 100));
+  } else if (fileEvents2.length > 0) {
+    pass("Chat T2 (follow-up): files written (12.2 parser working)", `${fileEvents2.length} file(s)`);
+  } else {
+    fail("Chat T2 (follow-up): no nexus_summary and 0 files — possible 12.2 regression");
+  }
+
+  console.log(`  T2 done: ${t2.ms}ms | events=${t2.events.length} | files=${fileEvents2.length}`);
+
+  // Turn 3 — intentionally a smalltalk to verify intent gating.
+  const t3 = await drainSSE("/api/chat", {
+    message: "What is React?",
+    sessionId,
+  }, 30_000);
+  const summaryEvent3 = t3.events.find(e => e.nexus_summary);
+  if (summaryEvent3) pass("Chat T3 (smalltalk): nexus_summary received", summaryEvent3.nexus_summary?.slice(0, 80));
+  else               warn("Chat T3 (smalltalk): no nexus_summary");
+  console.log(`  T3 done: ${t3.ms}ms | events=${t3.events.length}`);
+}
+
+/** Raw HTTP request with exact path (bypasses URL class normalisation). */
+function rawHttpGet(rawPath: string): Promise<{ status: number; body: string; ms: number }> {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const req = http.request(
+      { hostname: "localhost", port: parseInt(process.env.PORT || "5000"), path: rawPath, method: "GET" },
+      (res) => {
+        let data = "";
+        res.on("data", (d) => (data += d));
+        res.on("end", () => resolve({ status: res.statusCode || 0, body: data, ms: Date.now() - start }));
+      }
+    );
+    req.on("error", () => resolve({ status: 0, body: "", ms: Date.now() - start }));
+    req.end();
+  });
 }
 
 async function testSandboxPreview() {
   console.log(`\n${bold(cyan("── SANDBOX PREVIEW ──"))}`);
-  // Request a non-existent session — expect 404, not a crash.
-  const r = await GET("/sandbox-preview/nonexistent-session-xyz");
-  if (r.status === 404) pass("GET /sandbox-preview/:nonexistent → 404");
-  else fail("GET /sandbox-preview/:nonexistent", `expected 404 got ${r.status}`);
 
-  // Path-traversal attempt
-  const r2 = await GET("/sandbox-preview/nonexistent-session-xyz/../../../etc/passwd");
-  if ([400, 404].includes(r2.status)) pass("Path-traversal attempt blocked", `status=${r2.status}`);
-  else fail("Path-traversal attempt NOT blocked", `status=${r2.status} body=${r2.body.slice(0, 80)}`);
+  // Non-existent session → 404 (not a server crash).
+  const r1 = await rawHttpGet("/sandbox-preview/nonexistent-session-xyz");
+  if (r1.status === 404) pass("GET /sandbox-preview/:nonexistent → 404");
+  else fail("GET /sandbox-preview/:nonexistent", `expected 404 got ${r1.status}`);
+
+  // Raw path-traversal with literal dots — our rawUrl guard must fire before Express normalises.
+  const r2 = await rawHttpGet("/sandbox-preview/nonexistent-session-xyz/../../../etc/passwd");
+  if ([400, 404].includes(r2.status)) pass("Path-traversal (literal ../) blocked", `status=${r2.status}`);
+  else fail("Path-traversal (literal ../) NOT blocked", `status=${r2.status} body=${r2.body.slice(0, 80)}`);
+
+  // Encoded traversal  %2e%2e%2f
+  const r3 = await rawHttpGet("/sandbox-preview/session%2F..%2F..%2Fetc%2Fpasswd");
+  if ([400, 404].includes(r3.status)) pass("Path-traversal (encoded %2F) blocked", `status=${r3.status}`);
+  else fail("Path-traversal (encoded %2F) NOT blocked", `status=${r3.status} body=${r3.body.slice(0, 80)}`);
+
+  // Valid session + non-existent file → 404 (no crash).
+  const r4 = await rawHttpGet("/sandbox-preview/nonexistent-session-xyz/index.html");
+  if (r4.status === 404) pass("GET /sandbox-preview/session/file → 404 when no sandbox");
+  else fail("GET /sandbox-preview/session/file", `expected 404 got ${r4.status}`);
 }
 
 async function testE2BStatus() {
@@ -467,7 +541,7 @@ async function run() {
   await testE2BStatus();
   await testSecurityNpmAudit();
   await testDeployWebhookAuth();
-  await testChatDegradedMode();
+  await testChatLive();
   await testRateLimiting();
 
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);

@@ -9,15 +9,16 @@ const log = nexusLog("cost");
 
 // Approximate USD per 1K tokens (input/output combined, conservative estimate).
 const COST_TABLE: Record<string, { in: number; out: number }> = {
-  "gemini-1.5-pro-latest": { in: 0.00125, out: 0.005 },
-  "gemini-1.5-flash-latest": { in: 0.000075, out: 0.0003 },
-  "gemini-2.0-flash-exp": { in: 0, out: 0 },
-  "gemini-2.5-flash": { in: 0.000075, out: 0.0003 },
-  "llama-3.3-70b-versatile": { in: 0.00059, out: 0.00079 },
-  "llama-3.1-8b-instant": { in: 0.00005, out: 0.00008 },
-  "gpt-4o": { in: 0.0025, out: 0.01 },
-  "gpt-4o-mini": { in: 0.00015, out: 0.0006 },
-  "DeepSeek-V3": { in: 0, out: 0 },
+  "gemini-2.5-flash-preview-04-17": { in: 0.00015, out: 0.0006 },
+  "gemini-2.0-flash":               { in: 0.0001,  out: 0.0004 },
+  "gemini-2.0-flash-lite":          { in: 0.000075, out: 0.0003 },
+  "gemini-2.0-flash-exp":           { in: 0, out: 0 },
+  "gemini-2.5-flash":               { in: 0.000075, out: 0.0003 },
+  "llama-3.3-70b-versatile":        { in: 0.00059, out: 0.00079 },
+  "llama-3.1-8b-instant":           { in: 0.00005, out: 0.00008 },
+  "gpt-4o":                         { in: 0.0025,  out: 0.01 },
+  "gpt-4o-mini":                    { in: 0.00015, out: 0.0006 },
+  "DeepSeek-V3":                    { in: 0, out: 0 },
 };
 
 function priceFor(model: string, tokensIn: number, tokensOut: number): number {

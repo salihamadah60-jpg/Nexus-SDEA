@@ -613,7 +613,7 @@ function selectTieredModel(requestedModel: string, message: string, mode: string
   const isComplex = complexKeywords.some(k => message.toLowerCase().includes(k)) || mode === 'architecture';
   
   if (isComplex) {
-    return 'gemini-1.5-pro-latest'; // Hardcoded for pro tier when needed
+    return 'gemini-2.5-flash-preview-04-17'; // High-reasoning tier
   }
   
   return requestedModel;
@@ -662,7 +662,7 @@ export function createChatHandler(broadcast: (data: string, sid?: string) => voi
     const providers = [
       { id: 'gemini-2.5-flash-preview-04-17', name: 'Gemini 2.5 Flash', type: 'gemini', client: ai },
       { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', type: 'gemini', client: ai },
-      { id: 'gemini-1.5-flash-latest', name: 'Gemini Alt', type: 'gemini', client: altAi || ai },
+      { id: 'gemini-2.0-flash-lite', name: 'Gemini Alt', type: 'gemini', client: altAi || ai },
       { id: 'gpt-4o', name: 'GitHub GPT-4o', type: 'github', client: github },
       { id: 'llama-3.3-70b-versatile', name: 'Groq Kernel', type: 'groq', client: groq },
       { id: 'meta-llama/Llama-3.2-3B-Instruct', name: 'HuggingFace Llama', type: 'hf', client: hf },

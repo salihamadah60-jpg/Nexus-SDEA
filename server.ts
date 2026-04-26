@@ -163,7 +163,14 @@ async function bootstrap() {
   // Sovereign Blackboard wrote into sandbox/projects/<sessionId>/. Used by
   // the Preview pane for static-only outputs (no autopilot needed).
   app.get(["/sandbox-preview/:sessionId", "/sandbox-preview/:sessionId/", "/sandbox-preview/:sessionId/*"], (req, res) => {
+    // Block path-traversal attempts in the raw URL before Express normalisation strips them.
+    const rawUrl = req.originalUrl || "";
+    if (/\.\.(\/|\\|%2f|%5c|%2F|%5C)/i.test(rawUrl) || decodeURIComponent(rawUrl).includes("../")) {
+      return res.status(400).send("Bad path — traversal detected");
+    }
     const sessionId = req.params.sessionId;
+    // Reject session IDs that look like path segments (extra safety).
+    if (/[/\\]/.test(sessionId)) return res.status(400).send("Bad session id");
     const root = path.join(SANDBOX_BASE, sessionId);
     if (!existsSync(root)) return res.status(404).send("Session sandbox not found");
     const rel = (req.params as any)[0] || "index.html";
