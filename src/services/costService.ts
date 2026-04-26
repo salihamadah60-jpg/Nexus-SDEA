@@ -9,7 +9,6 @@ const log = nexusLog("cost");
 
 // Approximate USD per 1K tokens (input/output combined, conservative estimate).
 const COST_TABLE: Record<string, { in: number; out: number }> = {
-  "gemini-2.5-flash-preview-04-17": { in: 0.00015, out: 0.0006 },
   "gemini-2.0-flash":               { in: 0.0001,  out: 0.0004 },
   "gemini-2.0-flash-lite":          { in: 0.000075, out: 0.0003 },
   "gemini-2.0-flash-exp":           { in: 0, out: 0 },

@@ -24,6 +24,7 @@ import { classifyIntent, intentDirective, sanitizeLanguage } from "./intentServi
 import { compactHistory, recordFiles, recordPort, recordDecision, getFacts, renderFacts } from "./memoryService.js";
 import { eventStream } from "./eventStreamService.js";
 import { nexusLog } from "./logService.js";
+import { reifyImports } from "./importReifierService.js";
 import http from "http";
 
 /**
@@ -613,7 +614,7 @@ function selectTieredModel(requestedModel: string, message: string, mode: string
   const isComplex = complexKeywords.some(k => message.toLowerCase().includes(k)) || mode === 'architecture';
   
   if (isComplex) {
-    return 'gemini-2.5-flash-preview-04-17'; // High-reasoning tier
+    return 'gemini-2.0-flash'; // High-reasoning tier (use confirmed-working model)
   }
   
   return requestedModel;
@@ -660,9 +661,8 @@ export function createChatHandler(broadcast: (data: string, sid?: string) => voi
     const { ai, altAi, github, groq, hf } = getProviderClients(customKeys);
 
     const providers = [
-      { id: 'gemini-2.5-flash-preview-04-17', name: 'Gemini 2.5 Flash', type: 'gemini', client: ai },
       { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', type: 'gemini', client: ai },
-      { id: 'gemini-2.0-flash-lite', name: 'Gemini Alt', type: 'gemini', client: altAi || ai },
+      { id: 'gemini-2.0-flash-lite', name: 'Gemini Flash Lite', type: 'gemini', client: altAi || ai },
       { id: 'gpt-4o', name: 'GitHub GPT-4o', type: 'github', client: github },
       { id: 'llama-3.3-70b-versatile', name: 'Groq Kernel', type: 'groq', client: groq },
       { id: 'meta-llama/Llama-3.2-3B-Instruct', name: 'HuggingFace Llama', type: 'hf', client: hf },
@@ -844,7 +844,14 @@ export function createChatHandler(broadcast: (data: string, sid?: string) => voi
         broadcast('__REFRESH_FS__', sessionId);
       }
 
-      send({ nexus_streaming: true, status: `Writing ${parsed.filesToWrite.length} file(s)...` });
+      // Phase 12.4 — Import Reifier: synthesise stubs for orphan relative imports
+      send({ nexus_streaming: true, status: `Import Reifier: Scanning ${parsed.filesToWrite.length} file(s) for orphan imports...` });
+      const reified = await reifyImports(parsed.filesToWrite, path.join(SANDBOX_BASE, sessionId));
+      if (reified.stubsGenerated > 0) {
+        send({ nexus_streaming: true, status: `Import Reifier: ${reified.stubsGenerated} stub(s) auto-generated → ${reified.stubPaths.join(', ')}` });
+      }
+
+      send({ nexus_streaming: true, status: `Writing ${reified.files.length} file(s)...` });
       
       // Update journal for atomic recovery
       await writeJournal({
@@ -854,7 +861,7 @@ export function createChatHandler(broadcast: (data: string, sid?: string) => voi
         timestamp: new Date().toISOString()
       });
 
-      for (const file of parsed.filesToWrite) {
+      for (const file of reified.files) {
         try {
           const targetPath = await validatePath(sessionId, file.path, true);
           await fs.mkdir(path.dirname(targetPath), { recursive: true });

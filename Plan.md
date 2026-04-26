@@ -184,7 +184,7 @@ A line flips to ✅ only when **all three** are true:
   3. Add a `--no-audit --no-fund --prefer-offline` policy to autopilot's npm wrapper to avoid the noisy warnings.
 - **Acceptance:** Re-run the Aurora prompt; first `npm install` exits 0 and brings in Tailwind v4 + vite plugin.
 
-### 12.4 — Generator emits orphan imports (no self-reification) ⬜
+### 12.4 — Generator emits orphan imports (no self-reification) ✅
 
 - **Symptom:** Turn 1 of the stress test wrote `App.tsx` importing 8 components from `./components/*` but wrote zero of those component files. The result compiles to red squiggles on first run.
 - **Root cause:** Writer node has no post-write static check that compares "imports present" vs "files actually written this turn". The Planner is supposed to atomize but trusts the model's self-decomposition, which often produces a compact App.tsx and forgets the leaves.
