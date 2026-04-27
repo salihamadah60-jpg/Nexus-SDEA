@@ -532,12 +532,6 @@
   },
   "lessons_learned": [
     {
-      "topic": "Task Analysis [task-1776701630986-odyf4f]",
-      "lesson": "I encountered an issue processing your request. Please try again.",
-      "implemented": true,
-      "timestamp": "2026-04-20T16:13:52.407Z"
-    },
-    {
       "topic": "Task Analysis [task-1776709733356-dkoky0]",
       "lesson": "⚠️ All AI providers failed to respond. Check your API keys in environment variables (GEMINI_API_KEY is required). If keys are set, the model quota may be exhausted — try again shortly.",
       "implemented": true,
@@ -650,6 +644,12 @@
       "lesson": "Successful build pattern for: Build a high-end, responsive landing page using React and Tailwind CSS. Strictly adhere to these constraints, Other things depend on your choose, e.g: about what, ...etc ",
       "implemented": true,
       "timestamp": "2026-04-26T17:27:23.226Z"
+    },
+    {
+      "topic": "Terminal Correction: npm install --legacy-peer-deps --force",
+      "lesson": "Command failed initially. Fix: npm install --legacy-peer-deps --force. Output: added 2 packages, and audited 76 packages in 919ms\n\n11 packages are looking for funding\n  run `npm f",
+      "implemented": true,
+      "timestamp": "2026-04-27T14:15:38.887Z"
     }
   ]
 }
