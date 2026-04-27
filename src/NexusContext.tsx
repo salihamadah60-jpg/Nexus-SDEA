@@ -423,6 +423,18 @@ export function NexusProvider({ children }: { children: React.ReactNode }) {
             onMetadataUpdate({ usedKey: parsed.nexus_used_key });
           }
 
+          if (parsed.nexus_thinking) {
+            onMetadataUpdate({ thinking: parsed.nexus_thinking });
+          }
+
+          if (parsed.nexus_suggestion) {
+            onMetadataUpdate({ suggestion: parsed.nexus_suggestion });
+          }
+
+          if (parsed.nexus_phase) {
+            onMetadataUpdate({ phase: parsed.nexus_phase });
+          }
+
           if (parsed.system_notification) {
             addNotification('info', 'Kernel Switch', parsed.system_notification);
           }
@@ -454,7 +466,7 @@ export function NexusProvider({ children }: { children: React.ReactNode }) {
       checkpointId = cpData.checkpointId;
     } catch {}
 
-    const userMsg: ChatMessage = { role: 'user', content, timestamp: Date.now() };
+    const userMsg: ChatMessage = { role: 'user', content, timestamp: Date.now(), checkpointId: checkpointId || undefined };
     const newTask: Task = {
       id: taskId,
       title: content.slice(0, 45) + (content.length > 45 ? '…' : ''),
@@ -613,12 +625,8 @@ export function NexusProvider({ children }: { children: React.ReactNode }) {
     if (!userMsg || userMsg.role !== 'user' || !state.currentSessionId) return;
 
     const sessionId = state.currentSessionId;
-    const nextMsg = state.chatHistory[index + 1];
-    let newHistory = [...state.chatHistory];
-
-    if (nextMsg && nextMsg.role === 'assistant') {
-      newHistory.splice(index + 1, 1);
-    }
+    // Delete ALL messages after this user message (full history truncation from this point)
+    let newHistory = state.chatHistory.slice(0, index + 1);
 
     const placeholder: ChatMessage = {
       role: 'assistant',

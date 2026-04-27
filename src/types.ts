@@ -24,6 +24,8 @@ export interface FileWriteEntry {
 
 export interface ChatMessageMetadata {
   thought?: string;
+  thinking?: string;
+  thinkingMs?: number;
   actionChain?: string[];
   filesRead?: string[];
   filesModified?: FileWriteEntry[];
@@ -34,6 +36,8 @@ export interface ChatMessageMetadata {
   streamChars?: number;
   intent?: 'smalltalk' | 'question' | 'build' | 'command';
   usedKey?: string;
+  suggestion?: string;
+  phase?: string;
 }
 
 export interface ChatMessage {
@@ -41,6 +45,7 @@ export interface ChatMessage {
   content: string;
   timestamp: number;
   metadata?: ChatMessageMetadata;
+  checkpointId?: string;
 }
 
 export interface Session {

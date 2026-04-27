@@ -1173,6 +1173,25 @@ export function createChatHandler(broadcast: (data: string, sid?: string) => voi
 
     send({ nexus_summary: finalSummary });
 
+    // Emit a contextual follow-up suggestion based on what was built
+    if (fileResults.length > 0 || terminalResults.length > 0) {
+      const exts = [...new Set(fileResults.map(f => f.path.split('.').pop() || ''))].filter(Boolean);
+      const hasReact = exts.some(e => ['tsx', 'jsx'].includes(e));
+      const hasStyle = exts.some(e => ['css', 'scss'].includes(e));
+      const hasApi = fileResults.some(f => f.path.includes('route') || f.path.includes('api') || f.path.includes('server'));
+      const hasTest = terminalResults.some(r => r.cmd.includes('test'));
+
+      let suggestion = '';
+      if (hasReact && !hasTest) suggestion = 'add unit tests for the new React components';
+      else if (hasApi && !hasTest) suggestion = 'add integration tests for the new API routes';
+      else if (hasStyle) suggestion = 'add a dark/light mode toggle using the existing CSS variables';
+      else if (hasReact) suggestion = 'add loading and error boundary states to the new components';
+      else if (fileResults.length > 0) suggestion = 'add TypeScript strict-mode checks and fix any type gaps';
+      else suggestion = 'run a security audit on the current dependency set';
+
+      if (suggestion) send({ nexus_suggestion: suggestion });
+    }
+
     if (sessionId && mongoose.connection.readyState === 1) {
       try {
         const session = await Session.findOne({ sessionId });

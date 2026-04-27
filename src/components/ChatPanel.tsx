@@ -6,8 +6,12 @@ import {
   Trash2, Edit3, RotateCcw, ChevronDown, ChevronRight, Brain,
   Terminal, ListChecks, FolderOpen, FileCode, Camera, CheckCircle2,
   XCircle, Loader2, AlertCircle, ExternalLink, Play, KeyRound, MessageSquare,
-  GitBranch, Shield, CornerDownRight
+  GitBranch, Shield, CornerDownRight, Lightbulb, BookOpen, Pencil,
+  FlaskConical, Eye, ArrowRight, X, Maximize2, GitCommit, LayoutList,
 } from 'lucide-react';
+import { cn } from '../utils';
+import Markdown from 'react-markdown';
+import { ChatMessage, ChatMessageMetadata, TerminalEntry, FileWriteEntry } from '../types';
 
 const INTENT_BADGES: Record<string, { label: string; color: string }> = {
   smalltalk: { label: 'CHAT',     color: 'bg-white/5 text-text-dim border-white/10' },
@@ -15,44 +19,531 @@ const INTENT_BADGES: Record<string, { label: string; color: string }> = {
   command:   { label: 'COMMAND',  color: 'bg-yellow-400/10 text-yellow-400 border-yellow-400/30' },
   build:     { label: 'BUILD',    color: 'bg-nexus-gold/10 text-nexus-gold border-nexus-gold/30' },
 };
-import { cn } from '../utils';
-import Markdown from 'react-markdown';
-import { ChatMessage, ChatMessageMetadata } from '../types';
 
-/**
- * Hydrated chat messages from MongoDB still contain the raw `[NEXUS:THOUGHT]…[/NEXUS:THOUGHT]`,
- * `[NEXUS:CHAIN]`, `[NEXUS:FILE:…]`, `[NEXUS:TERMINAL]`, `[NEXUS:SCREENSHOT]`
- * envelopes that the live parser strips into the metadata object. After a
- * browser refresh those metadata objects aren't reconstructed, so the markers
- * leak into the rendered Markdown. Strip them here so the bubble shows only
- * the human-facing prose, while the accordions below render whatever
- * metadata IS present (live messages keep both, hydrated ones just show prose).
- */
 function sanitizeNexusContent(raw: string): string {
   if (!raw) return raw;
   let s = raw;
-  // Multi-line blocks: [NEXUS:TAG]…[/NEXUS:TAG]
-  s = s.replace(/\[NEXUS:[A-Z_]+(?::[^\]]*)?\][\s\S]*?\[\/NEXUS:[A-Z_]+\]/g, "");
-  // Inline self-closing markers like [NEXUS:SCREENSHOT]ok[/NEXUS:SCREENSHOT]
-  // (covered above) and stray opening tags from interrupted streams:
-  s = s.replace(/\[\/?NEXUS:[A-Z_]+(?::[^\]]*)?\]/g, "");
-  // Collapse 3+ blank lines that the strip can leave behind
-  s = s.replace(/\n{3,}/g, "\n\n").trim();
+  s = s.replace(/\[NEXUS:[A-Z_]+(?::[^\]]*)?\][\s\S]*?\[\/NEXUS:[A-Z_]+\]/g, '');
+  s = s.replace(/\[\/?NEXUS:[A-Z_]+(?::[^\]]*)?\]/g, '');
+  s = s.replace(/\n{3,}/g, '\n\n').trim();
   return s;
 }
 
-// --- Live Blackboard Panel (Phase 8.1) -----------------------------------
+// ─── Phase labels (13.4) ────────────────────────────────────────────────────
+const PHASE_META: Record<string, { label: string; icon: any; color: string }> = {
+  reading:    { label: 'Reading',    icon: BookOpen,    color: 'text-nexus-cyan/70' },
+  planning:   { label: 'Planning',   icon: LayoutList,  color: 'text-nexus-gold/70' },
+  executing:  { label: 'Executing',  icon: Play,        color: 'text-violet-400/70' },
+  verifying:  { label: 'Verifying',  icon: FlaskConical,color: 'text-yellow-400/70' },
+  confirmed:  { label: 'Confirmed',  icon: CheckCircle2,color: 'text-nexus-green/70' },
+  summarising:{ label: 'Summary',    icon: ArrowRight,  color: 'text-text-dim/50' },
+};
 
+function PhaseLabel({ phase }: { phase: string }) {
+  const meta = PHASE_META[phase.toLowerCase()];
+  if (!meta) return null;
+  const Icon = meta.icon;
+  return (
+    <div className={cn('flex items-center gap-1.5 py-1', meta.color)}>
+      <Icon size={9} />
+      <span className="text-[8px] font-black uppercase tracking-[0.2em]">{meta.label}</span>
+      <div className="flex-1 h-px bg-current opacity-10" />
+    </div>
+  );
+}
+
+// ─── Thinking block (13.2) ──────────────────────────────────────────────────
+function ThinkingBlock({ content, ms }: { content: string; ms?: number }) {
+  const [open, setOpen] = useState(false);
+  const secs = ms ? Math.round(ms / 1000) : null;
+  return (
+    <div className="rounded-xl border border-nexus-gold/15 bg-nexus-gold/[0.03] overflow-hidden mb-2">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-white/[0.02] transition-colors text-left"
+      >
+        <Brain size={10} className="text-nexus-gold/60 shrink-0" />
+        <span className="text-[9px] font-bold uppercase tracking-[0.18em] text-nexus-gold/60 flex-1">
+          Thought{secs !== null ? ` for ${secs}s` : ''}
+        </span>
+        {open ? <ChevronDown size={10} className="text-text-dim/30" /> : <ChevronRight size={10} className="text-text-dim/30" />}
+      </button>
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="overflow-hidden"
+          >
+            <div className="px-3 pb-3 pt-0 border-t border-nexus-gold/10">
+              <p className="text-[11px] text-text-dim/60 font-mono leading-relaxed whitespace-pre-wrap italic">
+                {content}
+              </p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// ─── Action cards (13.1) ────────────────────────────────────────────────────
+function ReadFileGroup({ paths, onOpen }: { paths: string[]; onOpen: (p: string) => void }) {
+  const [expanded, setExpanded] = useState(paths.length <= 2);
+
+  if (paths.length === 0) return null;
+
+  if (paths.length <= 2) {
+    return (
+      <div className="space-y-1 mb-1">
+        {paths.map((p, i) => (
+          <div key={i} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-white/5 bg-white/[0.02] group">
+            <FileCode size={10} className="text-nexus-cyan/50 shrink-0" />
+            <span className="text-[10px] font-mono text-text-dim/60 truncate flex-1">{p}</span>
+            <button
+              onClick={() => onOpen(p)}
+              className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 text-[8px] font-bold uppercase tracking-widest text-nexus-cyan/70 hover:text-nexus-cyan px-1.5 py-0.5 rounded border border-nexus-cyan/20 hover:border-nexus-cyan/40"
+            >
+              <ExternalLink size={8} /> Open
+            </button>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-1 rounded-xl border border-white/5 bg-white/[0.02] overflow-hidden">
+      <button
+        onClick={() => setExpanded(v => !v)}
+        className="w-full flex items-center gap-2 px-2.5 py-2 hover:bg-white/[0.02] transition-colors"
+      >
+        <BookOpen size={10} className="text-nexus-cyan/50 shrink-0" />
+        <span className="text-[9px] font-bold uppercase tracking-[0.15em] text-text-dim/50 flex-1 text-left">
+          {paths.length} files read
+        </span>
+        {expanded ? <ChevronDown size={9} className="text-text-dim/30" /> : <ChevronRight size={9} className="text-text-dim/30" />}
+      </button>
+      <AnimatePresence initial={false}>
+        {expanded && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="overflow-hidden border-t border-white/5"
+          >
+            <div className="p-2 space-y-1">
+              {paths.map((p, i) => (
+                <div key={i} className="flex items-center gap-2 px-2 py-1 rounded group">
+                  <FileCode size={9} className="text-nexus-cyan/40 shrink-0" />
+                  <span className="text-[10px] font-mono text-text-dim/55 truncate flex-1">{p}</span>
+                  <button
+                    onClick={() => onOpen(p)}
+                    className="opacity-0 group-hover:opacity-100 transition-opacity text-[8px] text-nexus-cyan/60 hover:text-nexus-cyan"
+                  >
+                    <ExternalLink size={8} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function WriteFileCard({ file, onOpen }: { file: FileWriteEntry; onOpen: (p: string) => void }) {
+  const kb = (file.size / 1024).toFixed(1);
+  return (
+    <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-nexus-green/15 bg-nexus-green/[0.03] group mb-1">
+      <CheckCircle2 size={10} className="text-nexus-green/70 shrink-0" />
+      <code className="text-[10px] font-mono text-nexus-green/80 truncate flex-1">{file.path}</code>
+      <span className="text-[9px] text-text-dim/30 shrink-0">{kb}kb</span>
+      <button
+        onClick={() => onOpen(file.path)}
+        className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 text-[8px] font-bold uppercase tracking-widest text-nexus-cyan/70 hover:text-nexus-cyan px-1.5 py-0.5 rounded border border-nexus-cyan/20 hover:border-nexus-cyan/40 shrink-0"
+      >
+        <ExternalLink size={8} /> Open
+      </button>
+    </div>
+  );
+}
+
+function RunShellCard({ entry }: { entry: TerminalEntry }) {
+  const [open, setOpen] = useState(!entry.success);
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard.writeText(entry.cmd);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  return (
+    <div className={cn(
+      'rounded-lg border overflow-hidden mb-1',
+      entry.success ? 'border-nexus-green/15 bg-nexus-green/[0.02]' : 'border-red-400/20 bg-red-400/[0.02]'
+    )}>
+      <div className="flex items-center gap-2 px-2.5 py-1.5">
+        {entry.success
+          ? <CheckCircle2 size={10} className="text-nexus-green/70 shrink-0" />
+          : <XCircle size={10} className="text-red-400/70 shrink-0" />
+        }
+        <code className={cn(
+          'text-[10px] font-mono flex-1 truncate',
+          entry.success ? 'text-nexus-green/80' : 'text-red-400/80'
+        )}>
+          $ {entry.retried ? (entry.fixedCmd || entry.cmd) : entry.cmd}
+        </code>
+        {entry.retried && (
+          <span className="text-[8px] text-yellow-400 font-bold px-1 py-0.5 rounded bg-yellow-400/10 shrink-0">
+            AUTO-FIXED
+          </span>
+        )}
+        <button onClick={copy} className="p-1 rounded hover:bg-white/10 text-text-dim hover:text-white transition-colors shrink-0">
+          {copied ? <Check size={9} /> : <Copy size={9} />}
+        </button>
+        {entry.output && (
+          <button onClick={() => setOpen(v => !v)} className="p-1 rounded hover:bg-white/10 text-text-dim transition-colors shrink-0">
+            {open ? <ChevronDown size={9} /> : <ChevronRight size={9} />}
+          </button>
+        )}
+      </div>
+      <AnimatePresence initial={false}>
+        {open && entry.output && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.12 }}
+            className="overflow-hidden"
+          >
+            <pre className="px-2.5 py-2 text-[9px] font-mono text-text-dim/60 whitespace-pre-wrap break-words bg-black/20 border-t border-white/5 max-h-36 overflow-y-auto custom-scrollbar">
+              {entry.output.slice(0, 2000) || '(no output)'}
+            </pre>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// ─── Inline screenshot with lightbox (13.5) ─────────────────────────────────
+function InlineScreenshot({ sessionId, filename }: { sessionId: string; filename: string }) {
+  const [lightbox, setLightbox] = useState(false);
+  const [open, setOpen] = useState(true);
+  const src = `/api/visual-debug/${sessionId}/${filename}`;
+  return (
+    <>
+      <div className="rounded-xl border border-nexus-cyan/15 overflow-hidden mb-1">
+        <button
+          onClick={() => setOpen(v => !v)}
+          className="w-full flex items-center gap-2 px-2.5 py-2 hover:bg-white/[0.02] transition-colors text-left"
+        >
+          <Camera size={10} className="text-nexus-cyan/60 shrink-0" />
+          <span className="text-[9px] font-bold uppercase tracking-[0.15em] text-nexus-cyan/60 flex-1">
+            Visual Verification
+          </span>
+          <button
+            onClick={e => { e.stopPropagation(); setLightbox(true); }}
+            className="p-1 rounded hover:bg-white/10 text-text-dim/40 hover:text-nexus-cyan transition-colors"
+            title="Full screen"
+          >
+            <Maximize2 size={9} />
+          </button>
+          {open ? <ChevronDown size={9} className="text-text-dim/30" /> : <ChevronRight size={9} className="text-text-dim/30" />}
+        </button>
+        <AnimatePresence initial={false}>
+          {open && (
+            <motion.div
+              initial={{ height: 0 }}
+              animate={{ height: 'auto' }}
+              exit={{ height: 0 }}
+              className="overflow-hidden border-t border-nexus-cyan/10"
+            >
+              <img
+                src={src}
+                alt="Visual snapshot"
+                className="w-full object-cover cursor-zoom-in"
+                onClick={() => setLightbox(true)}
+                onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+      <AnimatePresence>
+        {lightbox && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[9999] bg-black/90 flex items-center justify-center p-8"
+            onClick={() => setLightbox(false)}
+          >
+            <button
+              onClick={() => setLightbox(false)}
+              className="absolute top-4 right-4 p-2 rounded-full bg-white/10 text-white hover:bg-white/20"
+            >
+              <X size={16} />
+            </button>
+            <img
+              src={src}
+              alt="Full size snapshot"
+              className="max-w-full max-h-full object-contain rounded-xl shadow-2xl"
+              onClick={e => e.stopPropagation()}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </>
+  );
+}
+
+// ─── Suggestion card (13.6) ─────────────────────────────────────────────────
+function SuggestionCard({
+  text,
+  onAccept,
+  onDismiss,
+}: {
+  text: string;
+  onAccept: (text: string) => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -4 }}
+      transition={{ duration: 0.2 }}
+      className="mt-2 flex items-start gap-2 px-3 py-2.5 rounded-xl border border-nexus-gold/20 bg-nexus-gold/[0.05]"
+    >
+      <Lightbulb size={11} className="text-nexus-gold/70 shrink-0 mt-0.5" />
+      <div className="flex-1 min-w-0">
+        <p className="text-[10px] text-text-dim/70 leading-relaxed">
+          <span className="font-bold text-nexus-gold/80">Next: </span>
+          I can {text}. Would you like me to do that?
+        </p>
+      </div>
+      <div className="flex items-center gap-1 shrink-0">
+        <button
+          onClick={() => onAccept(`Yes, please ${text}`)}
+          className="text-[8px] font-bold uppercase tracking-widest px-2 py-1 rounded border bg-nexus-gold/15 border-nexus-gold/30 text-nexus-gold hover:bg-nexus-gold/25 transition-colors"
+        >
+          Yes, do it
+        </button>
+        <button
+          onClick={onDismiss}
+          className="p-1 rounded hover:bg-white/10 text-text-dim/40 hover:text-text-dim transition-colors"
+        >
+          <X size={10} />
+        </button>
+      </div>
+    </motion.div>
+  );
+}
+
+// ─── Action chain (step list) ────────────────────────────────────────────────
+function ActionChain({ steps }: { steps: string[] }) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="rounded-xl border border-nexus-cyan/15 bg-nexus-cyan/[0.02] overflow-hidden mb-1">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center gap-2 px-2.5 py-2 hover:bg-white/[0.02] transition-colors"
+      >
+        <ListChecks size={10} className="text-nexus-cyan/60 shrink-0" />
+        <span className="text-[9px] font-bold uppercase tracking-[0.15em] text-nexus-cyan/60 flex-1 text-left">
+          Plan
+        </span>
+        <span className="text-[8px] font-bold px-1.5 py-0.5 rounded bg-white/10 text-text-dim/50">{steps.length}</span>
+        {open ? <ChevronDown size={9} className="text-text-dim/30" /> : <ChevronRight size={9} className="text-text-dim/30" />}
+      </button>
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="overflow-hidden border-t border-nexus-cyan/10"
+          >
+            <div className="px-2.5 py-2 space-y-1.5">
+              {steps.map((step, i) => (
+                <div key={i} className="flex items-start gap-2">
+                  <div className="w-4 h-4 rounded-full bg-nexus-cyan/10 border border-nexus-cyan/25 flex items-center justify-center shrink-0 mt-0.5">
+                    <span className="text-[7px] font-bold text-nexus-cyan/60">{i + 1}</span>
+                  </div>
+                  <span className="text-[10px] text-text-dim/70 leading-relaxed">{step}</span>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// ─── Streaming indicator ─────────────────────────────────────────────────────
+function StreamingIndicator({ metadata }: { metadata?: ChatMessageMetadata }) {
+  const latestStatus = metadata?.statusHistory?.slice(-1)[0] || 'Neural synthesis in progress...';
+  return (
+    <div className="space-y-3 py-2">
+      <div className="flex items-center gap-3">
+        <div className="flex gap-1">
+          {[0, 0.2, 0.4].map((delay, i) => (
+            <div key={i} className="w-1.5 h-1.5 rounded-full bg-nexus-gold animate-bounce"
+              style={{ animationDelay: `${delay}s` }} />
+          ))}
+        </div>
+        <span className="text-[11px] font-bold text-nexus-gold/80 uppercase tracking-[0.15em] animate-pulse">
+          {latestStatus}
+        </span>
+        {metadata?.screenshot && (
+          <motion.div
+            initial={{ scale: 0 }}
+            animate={{ scale: 1 }}
+            className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-nexus-cyan/10 border border-nexus-cyan/30 text-nexus-cyan animate-pulse"
+          >
+            <Camera size={10} />
+            <span className="text-[8px] font-bold">LIVE SNAPSHOT</span>
+          </motion.div>
+        )}
+      </div>
+      {metadata?.actionChain && metadata.actionChain.length > 0 && (
+        <div className="space-y-1">
+          {metadata.actionChain.map((step, i) => (
+            <div key={i} className="flex items-center gap-2 text-[10px] text-text-dim/60">
+              <div className="w-4 h-4 rounded-full border border-nexus-gold/30 flex items-center justify-center shrink-0">
+                <span className="text-[8px] font-bold text-nexus-gold/60">{i + 1}</span>
+              </div>
+              <span>{step}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Assistant message bubble (all Phase 13 features) ────────────────────────
+function NexusMessageBubble({
+  msg,
+  index,
+  isLast,
+  sessionId,
+  onOpenFile,
+  onSuggestionAccept,
+}: {
+  msg: ChatMessage;
+  index: number;
+  isLast: boolean;
+  sessionId: string;
+  onOpenFile: (p: string) => void;
+  onSuggestionAccept: (text: string) => void;
+}) {
+  const meta = msg.metadata;
+  const isStreaming = meta?.streaming;
+
+  const [dismissedSuggestion, setDismissedSuggestion] = useState(false);
+
+  const hasThought    = !!(meta?.thought || meta?.thinking);
+  const thoughtText   = meta?.thinking || meta?.thought || '';
+  const hasChain      = (meta?.actionChain?.length || 0) > 0;
+  const hasFilesRead  = (meta?.filesRead?.length || 0) > 0;
+  const hasFilesWritten = (meta?.filesModified?.length || 0) > 0;
+  const hasTerminals  = (meta?.terminals?.length || 0) > 0;
+  const hasScreenshot = !!meta?.screenshot;
+  const hasSuggestion = !!meta?.suggestion && isLast && !dismissedSuggestion;
+
+  const intentBadge = meta?.intent ? INTENT_BADGES[meta.intent] : null;
+
+  return (
+    <div className="space-y-1">
+      {/* Provenance badges */}
+      {(intentBadge || meta?.usedKey) && !isStreaming && (
+        <div className="flex items-center gap-1.5 text-[8px] font-bold uppercase tracking-[0.15em] mb-1">
+          {intentBadge && (
+            <span className={cn('inline-flex items-center gap-1 px-1.5 py-0.5 rounded border', intentBadge.color)}>
+              <MessageSquare size={9} /> {intentBadge.label}
+            </span>
+          )}
+          {meta?.usedKey && (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border bg-white/5 text-text-dim/70 border-white/10" title="Provider key used">
+              <KeyRound size={9} /> {meta.usedKey}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* 13.2 — Thinking block */}
+      {!isStreaming && hasThought && (
+        <ThinkingBlock content={thoughtText} ms={meta?.thinkingMs} />
+      )}
+
+      {/* 13.1 — Action cards, in phase order */}
+      {!isStreaming && (
+        <div className="space-y-0.5">
+          {/* 13.4 — Phase labels from statusHistory */}
+          {meta?.phase && <PhaseLabel phase={meta.phase} />}
+
+          {/* 13.1 — Plan / Action chain */}
+          {hasChain && <ActionChain steps={meta!.actionChain!} />}
+
+          {/* 13.1 — Files read (grouped if >2) */}
+          {hasFilesRead && (
+            <ReadFileGroup paths={meta!.filesRead!} onOpen={onOpenFile} />
+          )}
+
+          {/* 13.1 — Files written */}
+          {hasFilesWritten && meta!.filesModified!.map((f, i) => (
+            <WriteFileCard key={i} file={f} onOpen={onOpenFile} />
+          ))}
+
+          {/* 13.1 — Terminal commands */}
+          {hasTerminals && meta!.terminals!.map((t, i) => (
+            <RunShellCard key={i} entry={t} />
+          ))}
+
+          {/* 13.5 — Inline screenshot */}
+          {hasScreenshot && sessionId && (
+            <InlineScreenshot sessionId={sessionId} filename={meta!.screenshot!} />
+          )}
+        </div>
+      )}
+
+      {/* Main prose bubble */}
+      <div className="bg-white/[0.03] border border-white/5 text-text-main rounded-2xl rounded-tl-none p-4 shadow-xl backdrop-blur-md">
+        {isStreaming ? (
+          <StreamingIndicator metadata={meta} />
+        ) : (
+          <div className="markdown-body prose-nexus text-[13px] leading-relaxed">
+            <Markdown>{sanitizeNexusContent(msg.content) || '...'}</Markdown>
+          </div>
+        )}
+      </div>
+
+      {/* 13.6 — Suggestion card (last assistant message only) */}
+      <AnimatePresence>
+        {hasSuggestion && (
+          <SuggestionCard
+            text={meta!.suggestion!}
+            onAccept={text => { onSuggestionAccept(text); setDismissedSuggestion(true); }}
+            onDismiss={() => setDismissedSuggestion(true)}
+          />
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// ─── Live Blackboard Bar (Phase 8.1) ─────────────────────────────────────────
 interface PlanStep { id: string; description: string; acceptance: string; status: string }
 interface AuditEntry { step: number; passed: boolean; severity: string; issues: string[]; reviewerModel: string }
 interface BlackboardTask { id: string; goal: string; plan: PlanStep[]; currentStep: number; status: string; retries: number; audits: AuditEntry[]; createdAt: number }
-
-const STEP_STATUS_COLORS: Record<string, string> = {
-  done: 'text-emerald-400',
-  in_progress: 'text-nexus-gold animate-pulse',
-  failed: 'text-red-400',
-  todo: 'text-text-dim/30',
-};
 
 const TASK_STATUS_COLORS: Record<string, string> = {
   done: 'border-emerald-400/20 bg-emerald-400/[0.02]',
@@ -64,7 +555,11 @@ const TASK_STATUS_COLORS: Record<string, string> = {
   failed: 'border-red-400/20 bg-red-400/[0.02]',
 };
 
-// Phase 10.3 — running cost badge for the current session.
+const STEP_STATUS_COLORS: Record<string, string> = {
+  done: 'text-emerald-400', in_progress: 'text-nexus-gold animate-pulse',
+  failed: 'text-red-400', todo: 'text-text-dim/30',
+};
+
 function CostBadge({ sessionId }: { sessionId: string }) {
   const [data, setData] = useState<{ calls: number; tokensIn: number; tokensOut: number; usd: number } | null>(null);
   useEffect(() => {
@@ -124,7 +619,6 @@ function LiveBlackboardBar({ sessionId }: { sessionId: string }) {
   const activeTasks = tasks.filter(t => !['done'].includes(t.status));
   const recentDone = tasks.filter(t => t.status === 'done').slice(-2);
   const visible = [...activeTasks, ...recentDone].slice(0, 5);
-
   if (visible.length === 0) return null;
 
   return (
@@ -134,31 +628,18 @@ function LiveBlackboardBar({ sessionId }: { sessionId: string }) {
         className="w-full flex items-center gap-2 px-4 py-2 hover:bg-white/[0.02] transition-colors"
       >
         <GitBranch size={11} className="text-nexus-gold/70 shrink-0" />
-        <span className="text-[9px] font-black uppercase tracking-[0.2em] text-nexus-gold/70 flex-1 text-left">
-          Blackboard Graph
-        </span>
+        <span className="text-[9px] font-black uppercase tracking-[0.2em] text-nexus-gold/70 flex-1 text-left">Blackboard Graph</span>
         <span className="text-[8px] font-mono text-text-dim/30">{visible.length} task{visible.length !== 1 ? 's' : ''}</span>
         {open ? <ChevronDown size={10} className="text-text-dim/30" /> : <ChevronRight size={10} className="text-text-dim/30" />}
       </button>
-
       <AnimatePresence initial={false}>
         {open && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            className="overflow-hidden"
-          >
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2 }} className="overflow-hidden">
             <div className="px-3 pb-2 space-y-1.5 max-h-64 overflow-y-auto custom-scrollbar">
               {visible.map(task => (
                 <div key={task.id} className={cn('rounded-lg border overflow-hidden', TASK_STATUS_COLORS[task.status] || 'border-white/5')}>
-                  <button
-                    className="w-full flex items-center gap-2 px-2.5 py-2 text-left hover:bg-white/[0.03] transition-colors"
-                    onClick={() => setExpanded(expanded === task.id ? null : task.id)}
-                  >
-                    <div className={cn(
-                      'text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded shrink-0',
+                  <button className="w-full flex items-center gap-2 px-2.5 py-2 text-left hover:bg-white/[0.03] transition-colors" onClick={() => setExpanded(expanded === task.id ? null : task.id)}>
+                    <div className={cn('text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded shrink-0',
                       task.status === 'done' ? 'bg-emerald-400/10 text-emerald-400' :
                       task.status === 'stasis' ? 'bg-red-400/10 text-red-400' :
                       task.status === 'writing' ? 'bg-nexus-cyan/10 text-nexus-cyan' :
@@ -166,25 +647,13 @@ function LiveBlackboardBar({ sessionId }: { sessionId: string }) {
                       'bg-nexus-gold/10 text-nexus-gold'
                     )}>{task.status}</div>
                     <span className="text-[10px] text-text-main/80 flex-1 truncate">{task.goal}</span>
-                    {task.retries > 0 && (
-                      <span className="text-[8px] text-yellow-400/70 shrink-0">{task.retries}↺</span>
-                    )}
-                    {task.plan.length > 0 && (
-                      <span className="text-[8px] text-text-dim/40 shrink-0">
-                        {task.plan.filter(s => s.status === 'done').length}/{task.plan.length}
-                      </span>
-                    )}
+                    {task.retries > 0 && <span className="text-[8px] text-yellow-400/70 shrink-0">{task.retries}↺</span>}
+                    {task.plan.length > 0 && <span className="text-[8px] text-text-dim/40 shrink-0">{task.plan.filter(s => s.status === 'done').length}/{task.plan.length}</span>}
                     {expanded === task.id ? <ChevronDown size={9} className="text-text-dim/30 shrink-0" /> : <ChevronRight size={9} className="text-text-dim/30 shrink-0" />}
                   </button>
-
                   <AnimatePresence initial={false}>
                     {expanded === task.id && task.plan.length > 0 && (
-                      <motion.div
-                        initial={{ height: 0 }}
-                        animate={{ height: 'auto' }}
-                        exit={{ height: 0 }}
-                        className="overflow-hidden border-t border-white/5"
-                      >
+                      <motion.div initial={{ height: 0 }} animate={{ height: 'auto' }} exit={{ height: 0 }} className="overflow-hidden border-t border-white/5">
                         <div className="px-2.5 py-2 space-y-1.5">
                           {task.plan.map((step, si) => {
                             const audit = task.audits.find(a => a.step === si);
@@ -194,17 +663,8 @@ function LiveBlackboardBar({ sessionId }: { sessionId: string }) {
                                 <div className="flex-1 min-w-0">
                                   <div className="flex items-center gap-1.5 mb-0.5">
                                     <span className="text-[8px] font-black text-text-dim/40">{step.id}</span>
-                                    <span className={cn('text-[8px] font-bold uppercase', STEP_STATUS_COLORS[step.status] || 'text-text-dim/30')}>
-                                      {step.status.replace('_', ' ')}
-                                    </span>
-                                    {audit && (
-                                      <span className={cn(
-                                        'text-[7px] font-black px-1 py-0.5 rounded',
-                                        audit.passed ? 'bg-emerald-400/10 text-emerald-400' : 'bg-red-400/10 text-red-400'
-                                      )}>
-                                        {audit.passed ? '✓ PASS' : '✗ FAIL'}
-                                      </span>
-                                    )}
+                                    <span className={cn('text-[8px] font-bold uppercase', STEP_STATUS_COLORS[step.status] || 'text-text-dim/30')}>{step.status.replace('_', ' ')}</span>
+                                    {audit && <span className={cn('text-[7px] font-black px-1 py-0.5 rounded', audit.passed ? 'bg-emerald-400/10 text-emerald-400' : 'bg-red-400/10 text-red-400')}>{audit.passed ? '✓ PASS' : '✗ FAIL'}</span>}
                                   </div>
                                   <p className="text-[9px] text-text-dim/60 leading-snug">{step.description}</p>
                                   {audit && !audit.passed && audit.issues.length > 0 && (
@@ -232,346 +692,15 @@ function LiveBlackboardBar({ sessionId }: { sessionId: string }) {
   );
 }
 
-// -------------------------------------------------------------------------
-
-function useAccordion(defaultOpen = false) {
-  const [open, setOpen] = useState(defaultOpen);
-  return { open, toggle: () => setOpen(v => !v) };
-}
-
-function Accordion({
-  title, icon, children, defaultOpen = false, badge, accent = 'default'
-}: {
-  title: string;
-  icon: React.ReactNode;
-  children: React.ReactNode;
-  defaultOpen?: boolean;
-  badge?: string | number;
-  accent?: 'default' | 'gold' | 'cyan' | 'green' | 'red';
-}) {
-  const { open, toggle } = useAccordion(defaultOpen);
-  const accentMap = {
-    default: 'text-text-dim border-white/5 hover:border-white/10',
-    gold: 'text-nexus-gold border-nexus-gold/20 hover:border-nexus-gold/30',
-    cyan: 'text-nexus-cyan border-nexus-cyan/20 hover:border-nexus-cyan/30',
-    green: 'text-green-400 border-green-400/20 hover:border-green-400/30',
-    red: 'text-red-400 border-red-400/20 hover:border-red-400/30',
-  };
-  return (
-    <div className={cn('rounded-xl border overflow-hidden', accentMap[accent])}>
-      <button
-        onClick={toggle}
-        className={cn(
-          'w-full flex items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-white/[0.03]',
-          open && 'bg-white/[0.02]'
-        )}
-      >
-        <span className="w-4 h-4 flex items-center justify-center opacity-80 shrink-0">
-          {icon}
-        </span>
-        <span className="text-[10px] font-bold uppercase tracking-[0.15em] flex-1">{title}</span>
-        {badge !== undefined && (
-          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-white/10 opacity-70">{badge}</span>
-        )}
-        <span className="w-4 h-4 flex items-center justify-center opacity-50">
-          {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        </span>
-      </button>
-      <AnimatePresence initial={false}>
-        {open && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2, ease: 'easeInOut' }}
-            className="overflow-hidden"
-          >
-            <div className="px-3 pb-3 pt-1 border-t border-white/5">
-              {children}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
-function GhostTerminalEntry({ entry, index }: { entry: any; index: number }) {
-  const [copied, setCopied] = useState(false);
-  const [outputOpen, setOutputOpen] = useState(!entry.success);
-
-  const copy = () => {
-    navigator.clipboard.writeText(entry.cmd);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  return (
-    <div className={cn(
-      'rounded-lg border overflow-hidden mb-2 last:mb-0',
-      entry.success ? 'border-green-400/15' : 'border-red-400/20'
-    )}>
-      <div className="flex items-center gap-2 px-3 py-2 bg-black/30">
-        {entry.success
-          ? <CheckCircle2 size={11} className="text-green-400 shrink-0" />
-          : <XCircle size={11} className="text-red-400 shrink-0" />
-        }
-        <code className={cn(
-          'text-[11px] font-mono flex-1 truncate',
-          entry.success ? 'text-green-400' : 'text-red-400'
-        )}>
-          $ {entry.retried ? entry.fixedCmd || entry.cmd : entry.cmd}
-        </code>
-        {entry.retried && (
-          <span className="text-[9px] text-yellow-400 font-bold px-1.5 py-0.5 rounded bg-yellow-400/10 shrink-0">
-            AUTO-FIXED
-          </span>
-        )}
-        <button
-          onClick={copy}
-          className="p-1 rounded hover:bg-white/10 text-text-dim hover:text-white transition-colors shrink-0"
-          title="Copy command"
-        >
-          {copied ? <Check size={11} /> : <Copy size={11} />}
-        </button>
-        {entry.output && (
-          <button
-            onClick={() => setOutputOpen(v => !v)}
-            className="p-1 rounded hover:bg-white/10 text-text-dim transition-colors shrink-0"
-          >
-            {outputOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-          </button>
-        )}
-      </div>
-      <AnimatePresence initial={false}>
-        {outputOpen && entry.output && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.15 }}
-          >
-            <pre className="px-3 py-2 text-[10px] font-mono text-text-dim/70 whitespace-pre-wrap break-words bg-black/20 border-t border-white/5 max-h-40 overflow-y-auto custom-scrollbar">
-              {entry.output.slice(0, 2000) || '(no output)'}
-            </pre>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
-function StreamingIndicator({ metadata }: { metadata?: ChatMessageMetadata }) {
-  const latestStatus = metadata?.statusHistory?.slice(-1)[0] || 'Neural synthesis in progress...';
-  return (
-    <div className="space-y-3 py-2">
-      <div className="flex items-center gap-3">
-        <div className="flex gap-1">
-          {[0, 0.2, 0.4].map((delay, i) => (
-            <div
-              key={i}
-              className="w-1.5 h-1.5 rounded-full bg-nexus-gold animate-bounce"
-              style={{ animationDelay: `${delay}s` }}
-            />
-          ))}
-        </div>
-        <span className="text-[11px] font-bold text-nexus-gold/80 uppercase tracking-[0.15em] animate-pulse">
-          {latestStatus}
-        </span>
-        {metadata?.screenshot && (
-          <motion.div 
-            initial={{ scale: 0 }} 
-            animate={{ scale: 1 }} 
-            className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-nexus-cyan/10 border border-nexus-cyan/30 text-nexus-cyan animate-pulse"
-          >
-            <Camera size={10} />
-            <span className="text-[8px] font-bold">LIVE SNAPSHOT</span>
-          </motion.div>
-        )}
-      </div>
-
-      {metadata?.actionChain && metadata.actionChain.length > 0 && (
-        <div className="space-y-1">
-          {metadata.actionChain.map((step, i) => (
-            <div key={i} className="flex items-center gap-2 text-[10px] text-text-dim/60">
-              <div className="w-4 h-4 rounded-full border border-nexus-gold/30 flex items-center justify-center shrink-0">
-                <span className="text-[8px] font-bold text-nexus-gold/60">{i + 1}</span>
-              </div>
-              <span>{step}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function NexusMessageBubble({ msg, index }: { msg: ChatMessage; index: number }) {
-  const { openFileInEditor, state } = useNexus();
-  const meta = msg.metadata;
-  const isStreaming = meta?.streaming;
-
-  const hasThought = !!meta?.thought;
-  const hasChain = (meta?.actionChain?.length || 0) > 0;
-  const hasFilesRead = (meta?.filesRead?.length || 0) > 0;
-  const hasFilesModified = (meta?.filesModified?.length || 0) > 0;
-  const hasTerminals = (meta?.terminals?.length || 0) > 0;
-  const hasScreenshot = !!meta?.screenshot;
-  const hasAnyMeta = hasThought || hasChain || hasFilesRead || hasFilesModified || hasTerminals || hasScreenshot;
-
-  const intentBadge = meta?.intent ? INTENT_BADGES[meta.intent] : null;
-
-  return (
-    <div className="space-y-2">
-      {/* Provenance row: intent + key used */}
-      {(intentBadge || meta?.usedKey) && !isStreaming && (
-        <div className="flex items-center gap-1.5 text-[8px] font-bold uppercase tracking-[0.15em]">
-          {intentBadge && (
-            <span className={cn('inline-flex items-center gap-1 px-1.5 py-0.5 rounded border', intentBadge.color)}>
-              <MessageSquare size={9} /> {intentBadge.label}
-            </span>
-          )}
-          {meta?.usedKey && (
-            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border bg-white/5 text-text-dim/70 border-white/10" title="Key used by the rotator for this response">
-              <KeyRound size={9} /> {meta.usedKey}
-            </span>
-          )}
-        </div>
-      )}
-
-      {/* Main message bubble */}
-      <div className="bg-white/[0.03] border border-white/5 text-text-main rounded-2xl rounded-tl-none p-4 shadow-xl backdrop-blur-md">
-        {isStreaming ? (
-          <StreamingIndicator metadata={meta} />
-        ) : (
-          <div className="markdown-body prose-nexus text-[13px] leading-relaxed">
-            <Markdown>{sanitizeNexusContent(msg.content) || '...'}</Markdown>
-          </div>
-        )}
-      </div>
-
-      {/* Metadata sections - only shown for assistant messages with content */}
-      {!isStreaming && hasAnyMeta && (
-        <div className="space-y-1.5 pl-2">
-          {/* Neural Logic (Thought) */}
-          {hasThought && (
-            <Accordion title="Neural Logic" icon={<Brain size={11} />} accent="gold">
-              <p className="text-[11px] text-text-dim/70 font-mono leading-relaxed whitespace-pre-wrap">
-                {meta!.thought}
-              </p>
-            </Accordion>
-          )}
-
-          {/* Action Chain */}
-          {hasChain && (
-            <Accordion title="Action Chain" icon={<ListChecks size={11} />} badge={meta!.actionChain!.length} accent="cyan" defaultOpen>
-              <div className="space-y-1.5">
-                {meta!.actionChain!.map((step, i) => (
-                  <div key={i} className="flex items-start gap-2">
-                    <div className="w-4 h-4 rounded-full bg-nexus-cyan/10 border border-nexus-cyan/30 flex items-center justify-center shrink-0 mt-0.5">
-                      <CheckCircle2 size={10} className="text-nexus-cyan" />
-                    </div>
-                    <span className="text-[11px] text-text-dim/80 leading-relaxed">{step}</span>
-                  </div>
-                ))}
-              </div>
-            </Accordion>
-          )}
-
-          {/* File Context */}
-          {(hasFilesRead || hasFilesModified) && (
-            <Accordion
-              title="File Context"
-              icon={<FolderOpen size={11} />}
-              badge={(meta!.filesRead?.length || 0) + (meta!.filesModified?.length || 0)}
-              accent="default"
-            >
-              <div className="space-y-3">
-                {hasFilesRead && (
-                  <div>
-                    <p className="text-[9px] uppercase font-bold tracking-widest text-text-dim/40 mb-1.5">Files Analyzed</p>
-                    <div className="space-y-1">
-                      {meta!.filesRead!.map((f, i) => (
-                        <div key={i} className="flex items-center gap-2 text-[11px] text-text-dim/60 font-mono">
-                          <FileCode size={10} className="shrink-0 opacity-50" />
-                          <span className="truncate">{f}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {hasFilesModified && (
-                  <div>
-                    <p className="text-[9px] uppercase font-bold tracking-widest text-text-dim/40 mb-1.5">Files Written</p>
-                    <div className="space-y-1.5">
-                      {meta!.filesModified!.map((f, i) => (
-                        <div key={i} className="flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <CheckCircle2 size={10} className="text-green-400 shrink-0" />
-                            <code className="text-[11px] text-green-400 font-mono truncate">{f.path}</code>
-                            <span className="text-[9px] text-text-dim/30 shrink-0">
-                              {(f.size / 1024).toFixed(1)}kb
-                            </span>
-                          </div>
-                          <button
-                            onClick={() => openFileInEditor(f.path)}
-                            className="flex items-center gap-1 text-[9px] font-bold uppercase tracking-widest text-nexus-cyan hover:text-white transition-colors shrink-0 px-2 py-1 rounded border border-nexus-cyan/20 hover:border-nexus-cyan/40 hover:bg-nexus-cyan/5"
-                            title="Open in editor"
-                          >
-                            <ExternalLink size={9} />
-                            View
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </Accordion>
-          )}
-
-          {/* Ghost Terminal */}
-          {hasTerminals && (
-            <Accordion
-              title="Terminal"
-              icon={<Terminal size={11} />}
-              badge={meta!.terminals!.length}
-              accent={meta!.terminals!.every(t => t.success) ? 'green' : 'red'}
-            >
-              <div className="space-y-1">
-                {meta!.terminals!.map((entry, i) => (
-                  <GhostTerminalEntry key={i} entry={entry} index={i} />
-                ))}
-              </div>
-            </Accordion>
-          )}
-
-          {/* Screenshot */}
-          {hasScreenshot && (
-            <Accordion title="Visual Verification" icon={<Camera size={11} />} accent="cyan" defaultOpen>
-              <div className="rounded-lg overflow-hidden border border-nexus-cyan/20">
-                <img
-                  src={`/api/visual-debug/${state.currentSessionId}/${meta!.screenshot}`}
-                  alt="Preview snapshot"
-                  className="w-full object-cover"
-                  onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                />
-              </div>
-            </Accordion>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
+// ─── Main ChatPanel ───────────────────────────────────────────────────────────
 export function ChatPanel() {
-  const { state, setState, sendMessage, retryMessage, createSession, deleteMessage, editMessage } = useNexus();
+  const { state, setState, sendMessage, retryMessage, createSession, deleteMessage, editMessage, openFileInEditor } = useNexus();
   const currentSession = state.sessions.find(s => s.sessionId === state.currentSessionId);
   const [input, setInput] = useState('');
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editVal, setEditVal] = useState('');
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -583,9 +712,7 @@ export function ChatPanel() {
   }, [input]);
 
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [state.chatHistory, state.isAILoading]);
 
   const handleSend = () => {
@@ -601,9 +728,13 @@ export function ChatPanel() {
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  const handleDelete = (index: number) => {
-    if (!window.confirm('Delete this message?')) return;
+  const handleDeleteRequest = (index: number) => {
+    setConfirmDeleteId(index);
+  };
+
+  const handleDeleteConfirm = (index: number) => {
     deleteMessage(index);
+    setConfirmDeleteId(null);
   };
 
   const startEdit = (index: number, content: string) => {
@@ -614,6 +745,11 @@ export function ChatPanel() {
   const saveEdit = (index: number) => {
     editMessage(index, editVal);
     setEditingId(null);
+  };
+
+  const handleSuggestionAccept = (text: string) => {
+    if (!state.currentSessionId) createSession();
+    sendMessage(text);
   };
 
   return (
@@ -629,7 +765,7 @@ export function ChatPanel() {
               {currentSession?.title || 'Neural Stream'}
             </h2>
             <p className="text-[8px] text-text-dim uppercase tracking-widest font-bold opacity-40">
-              {state.selectedModel} • {state.selectedMode} • Silent Operator v7.0
+              {state.selectedModel} • {state.selectedMode} • Silent Operator v8.0
             </p>
           </div>
         </div>
@@ -644,7 +780,7 @@ export function ChatPanel() {
         </div>
       </div>
 
-      {/* Live Blackboard Graph (Phase 8.1) */}
+      {/* Live Blackboard (Phase 8.1) */}
       {state.currentSessionId && <LiveBlackboardBar sessionId={state.currentSessionId} />}
 
       {/* Messages */}
@@ -666,10 +802,7 @@ export function ChatPanel() {
             )}
           >
             {/* Author row */}
-            <div className={cn(
-              'flex items-center gap-2 mb-2 px-1',
-              msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'
-            )}>
+            <div className={cn('flex items-center gap-2 mb-2 px-1', msg.role === 'user' ? 'flex-row-reverse' : 'flex-row')}>
               <div className={cn(
                 'w-5 h-5 rounded flex items-center justify-center shadow-lg',
                 msg.role === 'user'
@@ -682,9 +815,20 @@ export function ChatPanel() {
                 <span className="text-[9px] font-bold uppercase tracking-widest text-text-main">
                   {msg.role === 'user' ? 'Operator' : 'Nexus AI'}
                 </span>
-                <span className="text-[8px] text-text-dim flex items-center gap-1 mt-0.5 opacity-50">
-                  <Clock size={7} /> {new Date(msg.timestamp || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </span>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <span className="text-[8px] text-text-dim flex items-center gap-1 opacity-50">
+                    <Clock size={7} /> {new Date(msg.timestamp || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                  {/* Checkpoint badge */}
+                  {msg.checkpointId && (
+                    <span
+                      className="flex items-center gap-1 text-[7px] font-bold px-1.5 py-0.5 rounded border bg-nexus-green/10 border-nexus-green/25 text-nexus-green/70 cursor-default"
+                      title={`Checkpoint: ${msg.checkpointId}`}
+                    >
+                      <GitCommit size={7} /> CHECKPOINT
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -710,46 +854,68 @@ export function ChatPanel() {
                 )}
               </div>
             ) : (
-              <NexusMessageBubble msg={msg} index={i} />
+              <NexusMessageBubble
+                msg={msg}
+                index={i}
+                isLast={i === state.chatHistory.length - 1}
+                sessionId={state.currentSessionId || ''}
+                onOpenFile={openFileInEditor}
+                onSuggestionAccept={handleSuggestionAccept}
+              />
             )}
 
             {/* Action row */}
             <div className={cn(
-              'flex items-center gap-2 px-1 mt-1 opacity-60 hover:opacity-100 transition-opacity',
+              'flex items-center gap-1 px-1 mt-1 opacity-0 hover:opacity-100 focus-within:opacity-100 transition-opacity',
               msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'
             )}>
-              {msg.role === 'user' && (
-                <button
-                  onClick={() => retryMessage(i)}
-                  className="p-1.5 rounded hover:bg-white/5 text-text-dim hover:text-nexus-gold transition-colors"
-                  title="Retry"
-                >
-                  <RotateCcw size={11} />
-                </button>
+              {/* Inline delete confirmation */}
+              {confirmDeleteId === i ? (
+                <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-red-400/10 border border-red-400/20">
+                  <span className="text-[8px] font-bold text-red-400/80 uppercase tracking-widest">Delete?</span>
+                  <button onClick={() => handleDeleteConfirm(i)} className="text-[8px] font-bold text-red-400 hover:text-red-300 transition-colors px-1">Yes</button>
+                  <button onClick={() => setConfirmDeleteId(null)} className="text-[8px] font-bold text-text-dim hover:text-white transition-colors px-1">No</button>
+                </div>
+              ) : (
+                <>
+                  {/* Retry — only for user messages; deletes everything after + re-sends */}
+                  {msg.role === 'user' && (
+                    <button
+                      onClick={() => retryMessage(i)}
+                      className="p-1.5 rounded hover:bg-white/5 text-text-dim hover:text-nexus-gold transition-colors"
+                      title="Retry from this point (removes all messages after)"
+                    >
+                      <RotateCcw size={11} />
+                    </button>
+                  )}
+                  {/* Copy */}
+                  <button
+                    onClick={() => copyToClipboard(msg.content, i)}
+                    className="p-1.5 rounded hover:bg-white/5 text-text-dim hover:text-nexus-cyan transition-colors"
+                    title="Copy"
+                  >
+                    {copiedId === i ? <Check size={11} /> : <Copy size={11} />}
+                  </button>
+                  {/* Edit (user only) */}
+                  {msg.role === 'user' && (
+                    <button
+                      onClick={() => startEdit(i, msg.content)}
+                      className="p-1.5 rounded hover:bg-white/5 text-text-dim hover:text-nexus-gold transition-colors"
+                      title="Edit"
+                    >
+                      <Pencil size={11} />
+                    </button>
+                  )}
+                  {/* Delete */}
+                  <button
+                    onClick={() => handleDeleteRequest(i)}
+                    className="p-1.5 rounded hover:bg-white/5 text-text-dim hover:text-red-400 transition-colors"
+                    title="Delete"
+                  >
+                    <Trash2 size={11} />
+                  </button>
+                </>
               )}
-              <button
-                onClick={() => copyToClipboard(msg.content, i)}
-                className="p-1.5 rounded hover:bg-white/5 text-text-dim hover:text-nexus-cyan transition-colors"
-                title="Copy"
-              >
-                {copiedId === i ? <Check size={11} /> : <Copy size={11} />}
-              </button>
-              {msg.role === 'user' && (
-                <button
-                  onClick={() => startEdit(i, msg.content)}
-                  className="p-1.5 rounded hover:bg-white/5 text-text-dim hover:text-nexus-gold transition-colors"
-                  title="Edit"
-                >
-                  <Edit3 size={11} />
-                </button>
-              )}
-              <button
-                onClick={() => handleDelete(i)}
-                className="p-1.5 rounded hover:bg-white/5 text-text-dim hover:text-red-400 transition-colors"
-                title="Delete"
-              >
-                <Trash2 size={11} />
-              </button>
             </div>
           </div>
         ))}
@@ -761,12 +927,9 @@ export function ChatPanel() {
           <textarea
             ref={textareaRef}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault();
-                handleSend();
-              }
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); handleSend(); }
             }}
             placeholder={state.isAILoading ? 'Nexus is working...' : 'Instruct Nexus AI...'}
             rows={1}
@@ -782,7 +945,7 @@ export function ChatPanel() {
           </button>
         </div>
         <p className="text-center text-[8px] text-text-dim/20 mt-2 font-medium uppercase tracking-[0.1em]">
-          Cmd/Ctrl+Enter to Send • Silent Operator Protocol Active • Code written directly to files
+          Cmd/Ctrl+Enter to Send • Retry clears history from that point • Phase 13 Active
         </p>
       </div>
     </div>

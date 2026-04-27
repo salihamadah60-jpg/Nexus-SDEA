@@ -237,7 +237,7 @@ A line flips to ✅ only when **all three** are true:
 > panels, file previews, diff views, screenshots — all surfaced inline in the
 > chat stream without cluttering the conversation.
 
-### 13.1 — Structured Tool-Action Cards in Chat ⬜
+### 13.1 — Structured Tool-Action Cards in Chat ✅
 
 Every tool call the agent makes renders as a compact, collapsible **Action
 Card** inside the chat bubble, not as raw text.
@@ -264,7 +264,7 @@ Card** inside the chat bubble, not as raw text.
 
 ---
 
-### 13.2 — Thinking / Reasoning Disclosure ⬜
+### 13.2 — Thinking / Reasoning Disclosure ✅
 
 Before the first word of the answer, the agent narrates its reasoning in a
 collapsible block that doesn't interrupt the main message.
@@ -278,7 +278,7 @@ collapsible block that doesn't interrupt the main message.
 
 ---
 
-### 13.3 — Inline File Viewer & Diff ⬜
+### 13.3 — Inline File Viewer & Diff ✅
 
 Any file path mentioned in chat (or in an Action Card) is clickable, opening a
 lightweight preview without leaving the chat.
@@ -291,7 +291,7 @@ lightweight preview without leaving the chat.
 
 ---
 
-### 13.4 — Six-Phase Step Narration ⬜
+### 13.4 — Six-Phase Step Narration ✅
 
 The agent narrates each phase with consistent, labelled prose:
 
@@ -310,7 +310,7 @@ The agent narrates each phase with consistent, labelled prose:
 
 ---
 
-### 13.5 — Inline Screenshot Display ⬜
+### 13.5 — Inline Screenshot Display ✅
 
 After any verification screenshot, the image appears inline in the chat bubble.
 
@@ -322,7 +322,7 @@ After any verification screenshot, the image appears inline in the chat bubble.
 
 ---
 
-### 13.6 — Suggestion Cards ⬜
+### 13.6 — Suggestion Cards ✅
 
 At the end of each completed task, a single dismissible card with a one-click
 accept button replaces the current bold suggestion text.
