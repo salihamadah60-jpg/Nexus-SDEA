@@ -1,8 +1,206 @@
 import React, { useState, useEffect } from 'react';
-import { Shield, Database, Cpu, GitBranch, Zap, Activity, RefreshCw, CheckCircle2, XCircle, Palette, KeyRound, Timer, Rocket, BarChart2, Languages, Sparkles } from 'lucide-react';
+import { Shield, Database, Cpu, GitBranch, Zap, Activity, RefreshCw, CheckCircle2, XCircle, Palette, KeyRound, Timer, Rocket, BarChart2, Languages, Sparkles, Plus, Eye, EyeOff, Loader2, ExternalLink } from 'lucide-react';
 import { useNexus } from '../NexusContext';
 import { cn } from '../utils';
 import { MODELS, MODES, THEMES } from '../constants';
+
+interface ProviderRow {
+  id: 'gemini' | 'groq' | 'github' | 'hf' | 'deepseek';
+  label: string;
+  envVar: string;
+  href: string;
+  hint: string;
+}
+
+const PROVIDER_BANNER: ProviderRow[] = [
+  { id: 'gemini',   label: 'Gemini',          envVar: 'GEMINI_API_KEY',     href: 'https://aistudio.google.com/apikey',     hint: 'free tier — auto-suffixed for multi-key pool' },
+  { id: 'groq',     label: 'Groq Llama-3.3',  envVar: 'GROQ_API_KEY',       href: 'https://console.groq.com/keys',          hint: 'free 70B reasoning' },
+  { id: 'github',   label: 'GPT-4o (GitHub)', envVar: 'GITHUB_TOKEN',       href: 'https://github.com/settings/tokens',     hint: 'PAT with models:read scope' },
+  { id: 'hf',       label: 'HuggingFace',     envVar: 'HUGGINGFACE_TOKEN',  href: 'https://huggingface.co/settings/tokens', hint: 'backup pool' },
+  { id: 'deepseek', label: 'DeepSeek',        envVar: 'DEEPSEEK_API_KEY',   href: 'https://platform.deepseek.com/api_keys', hint: 'official API tier (or set OPENROUTER_API_KEY for free fallback)' },
+];
+
+function ProviderStatusBanner() {
+  const [statusMap, setStatusMap] = useState<Record<string, 'ACTIVE' | 'MISSING' | 'UNKNOWN'>>({});
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [draftValue, setDraftValue] = useState('');
+  const [draftName, setDraftName] = useState('');
+  const [reveal, setReveal] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [flash, setFlash] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+
+  const probe = async () => {
+    try {
+      const [s, ds] = await Promise.all([
+        fetch('/api/status').then(r => r.json()).catch(() => ({})),
+        fetch('/api/deepseek/status').then(r => r.json()).catch(() => ({} as any)),
+      ]);
+      setStatusMap({
+        gemini:   s?.gemini  === 'ACTIVE' ? 'ACTIVE' : 'MISSING',
+        groq:     s?.groq    === 'ACTIVE' ? 'ACTIVE' : 'MISSING',
+        github:   s?.github  === 'ACTIVE' ? 'ACTIVE' : 'MISSING',
+        hf:       s?.hf      === 'ACTIVE' ? 'ACTIVE' : 'MISSING',
+        deepseek: ds?.mode === 'official' || ds?.mode === 'openrouter' ? 'ACTIVE' : 'MISSING',
+      });
+    } catch {}
+  };
+
+  useEffect(() => { probe(); const t = setInterval(probe, 15_000); return () => clearInterval(t); }, []);
+
+  const open = (p: ProviderRow) => {
+    setOpenId(p.id);
+    setDraftName(p.envVar);
+    setDraftValue('');
+    setReveal(false);
+    setFlash(null);
+  };
+
+  const save = async () => {
+    if (!draftValue.trim()) { setFlash({ kind: 'err', text: 'paste a key first' }); return; }
+    setBusy(true); setFlash(null);
+    try {
+      const r = await fetch('/api/kernel/env-keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keys: [{ name: draftName.trim(), value: draftValue.trim(), autoSuffix: true }] }),
+      });
+      const data = await r.json();
+      const result = data?.results?.[0];
+      if (result?.kept) {
+        setFlash({ kind: 'ok', text: `${result.final} accepted (${result.validation?.verdict || 'live'})` });
+        setDraftValue('');
+        setOpenId(null);
+        setTimeout(() => probe(), 400);
+      } else {
+        const reason = result?.validation?.detail || data?.errors?.[0]?.error || 'rejected';
+        setFlash({ kind: 'err', text: `removed — ${reason}` });
+      }
+    } catch (e: any) {
+      setFlash({ kind: 'err', text: e?.message || 'network error' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const totalActive = Object.values(statusMap).filter(v => v === 'ACTIVE').length;
+
+  return (
+    <section className="rounded-xl border border-white/10 bg-gradient-to-br from-nexus-gold/[0.04] to-nexus-cyan/[0.03] p-3 space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <KeyRound size={13} className="text-nexus-gold" />
+          <h3 className="nexus-label mb-0">Provider Status</h3>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={cn(
+            'text-[9px] font-black tracking-[0.2em] uppercase px-1.5 py-0.5 rounded border',
+            totalActive > 0
+              ? 'text-emerald-400 border-emerald-400/30 bg-emerald-400/10'
+              : 'text-red-400 border-red-400/30 bg-red-400/10'
+          )}>
+            {totalActive}/{PROVIDER_BANNER.length} live
+          </span>
+          <button onClick={probe} className="text-text-dim/50 hover:text-white transition-colors p-0.5" title="Re-probe">
+            <RefreshCw size={11} />
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-1">
+        {PROVIDER_BANNER.map(p => {
+          const status = statusMap[p.id] || 'UNKNOWN';
+          const ok = status === 'ACTIVE';
+          const isOpen = openId === p.id;
+          return (
+            <div key={p.id} className={cn(
+              'rounded-lg border transition-all overflow-hidden',
+              ok ? 'border-emerald-400/15 bg-emerald-400/[0.03]' : 'border-white/5 bg-white/[0.02]'
+            )}>
+              <div className="flex items-center gap-2 px-2.5 py-1.5">
+                <span className={cn(
+                  'w-1.5 h-1.5 rounded-full shrink-0',
+                  ok ? 'bg-emerald-400 animate-pulse shadow-[0_0_6px_rgba(52,211,153,0.6)]' : 'bg-text-dim/30'
+                )} />
+                <span className={cn('text-[11px] font-bold flex-1 truncate', ok ? 'text-white' : 'text-text-dim/70')}>
+                  {p.label}
+                </span>
+                <span className={cn(
+                  'text-[8px] font-black tracking-[0.2em] uppercase shrink-0',
+                  ok ? 'text-emerald-400' : 'text-text-dim/40'
+                )}>{status}</span>
+                {ok ? (
+                  <CheckCircle2 size={11} className="text-emerald-400 shrink-0" />
+                ) : (
+                  <button
+                    onClick={() => isOpen ? setOpenId(null) : open(p)}
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-nexus-gold/30 bg-nexus-gold/10 text-nexus-gold text-[9px] font-bold uppercase tracking-widest hover:bg-nexus-gold/20"
+                  >
+                    <Plus size={9} /> {isOpen ? 'Cancel' : 'Add key'}
+                  </button>
+                )}
+              </div>
+
+              {isOpen && (
+                <div className="px-2.5 pb-2 pt-1 border-t border-white/5 space-y-1.5">
+                  <div className="flex items-center gap-2 text-[10px] text-text-dim/70">
+                    <span className="opacity-60">{p.hint}</span>
+                    {p.href && (
+                      <a href={p.href} target="_blank" rel="noreferrer" className="ml-auto inline-flex items-center gap-1 text-nexus-cyan hover:underline">
+                        get key <ExternalLink size={9} />
+                      </a>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="text"
+                      value={draftName}
+                      onChange={e => setDraftName(e.target.value)}
+                      className="w-40 bg-black/40 border border-white/10 rounded px-2 py-1 font-mono text-[10px] focus:outline-none focus:border-nexus-gold/50"
+                      placeholder="ENV_NAME"
+                    />
+                    <input
+                      type={reveal ? 'text' : 'password'}
+                      value={draftValue}
+                      onChange={e => setDraftValue(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter' && !busy) save(); }}
+                      placeholder="paste key…"
+                      className="flex-1 min-w-[120px] bg-black/40 border border-white/10 rounded px-2 py-1 font-mono text-[10px] focus:outline-none focus:border-nexus-gold/50"
+                      autoFocus
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setReveal(v => !v)}
+                      className="p-1 text-text-dim/60 hover:text-text-main"
+                      title={reveal ? 'Hide' : 'Reveal'}
+                    >
+                      {reveal ? <EyeOff size={11} /> : <Eye size={11} />}
+                    </button>
+                    <button
+                      onClick={save}
+                      disabled={busy}
+                      className="px-2.5 py-1 rounded bg-nexus-gold/15 hover:bg-nexus-gold/25 border border-nexus-gold/40 text-nexus-gold font-bold text-[9px] uppercase tracking-widest disabled:opacity-30 inline-flex items-center gap-1"
+                    >
+                      {busy ? <Loader2 size={10} className="animate-spin" /> : <Zap size={10} />}
+                      Save
+                    </button>
+                  </div>
+                  {flash && (
+                    <div className={cn('text-[10px] font-bold', flash.kind === 'ok' ? 'text-emerald-400' : 'text-red-400')}>
+                      {flash.kind === 'ok' ? '✓' : '⚠'} {flash.text}
+                    </div>
+                  )}
+                  <div className="text-[8px] text-text-dim/40 uppercase tracking-widest">
+                    persists to <code className="text-nexus-gold/60">.env.local</code> · live <code className="text-nexus-gold/60">process.env</code> · validated · auto-suffixed if name in use
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
 
 interface KeyQuotaEntry {
   id: string;
@@ -131,6 +329,11 @@ export function SettingsPanel() {
 
   return (
     <div className="flex flex-col gap-5 p-4 h-full overflow-y-auto custom-scrollbar">
+      {/* Provider Status Banner (Phase 13.8) — always-visible live detection
+         + one-click inline "Add key" that POSTs to /api/kernel/env-keys
+         (writes to .env.local and updates live process.env). */}
+      <ProviderStatusBanner />
+
       {/* DeepSeek / OpenRouter Auto-Routing — Phase 11.4 live status badge */}
       <section>
         <div className="flex items-center justify-between mb-2">

@@ -348,15 +348,68 @@ accept button replaces the current bold suggestion text.
 
 ---
 
-### 13.7 — Collapsible Action Groups ("N actions") ⬜
+### 13.7 — Collapsible Action Groups ("N actions") ✅
 
-When several tool calls happen in rapid sequence they collapse into a summary:
-`📄 3 actions`. Click to expand all.
+When several tool calls happen in rapid sequence they collapse into a summary
+chip — `📄 N actions ▸` — at the top of the assistant bubble. Click expands the
+full list of file reads / writes / terminals / screenshots inline.
 
-**Implementation notes**
-- Group consecutive `<ActionCard>`s of the same phase into `<ActionGroup>`.
-- Show a summary chip when collapsed, vertical list when expanded.
-- Auto-collapse groups with `success` status; leave `failed` groups expanded.
+**Implementation (landed)**
+- `ActionGroupChip` component in `src/components/ChatPanel.tsx` (line ~642):
+  consumes `filesRead`, `filesModified`, `terminals`, `screenshot` from
+  `ChatMessageMetadata` and renders them as one collapsible chip.
+- Header shows phase icons (`BookOpen`/`Pencil`/`Terminal`/`Camera`) inline,
+  the count, and an `ERRORS` pill when any terminal entry has `success:false`.
+- **Auto-collapse rule:** groups with all-success status start collapsed
+  (`useState(hasFailure)` initial value) — failed groups auto-expand.
+- Mounted in `NexusMessageBubble` (line ~824) so it replaces the previous
+  scattered cards. This also fixed the "formatting changes on session reload"
+  issue: cards used to render fully-expanded after rehydration; the chip is
+  now the single source of truth for collapsed state.
+- `AnimatePresence` + height/opacity transition for smooth expand/collapse.
+- Phase chain (`ActionChain`) still renders separately — it's a structural
+  outline, not a tool-call group.
+
+**Files**
+- `src/components/ChatPanel.tsx` — `ActionGroupChip` (new), wired into
+  `NexusMessageBubble` (replaces inline `ReadFileGroup` / `WriteFileCard` /
+  `RunShellCard` / `InlineScreenshot` siblings).
+
+---
+
+### 13.8 — Always-On Provider Status Banner ✅
+
+A compact, always-visible banner pinned to the top of the **Settings** panel
+that shows live detection status for every supported AI provider and offers a
+one-click inline **Add key** flow for any provider that's missing — even when
+some providers are already active (the `FirstRunKeyBanner` only shows when
+zero providers are detected, so it disappeared as soon as the user added their
+first key, leaving missing providers invisible). This banner stays.
+
+**Implementation (landed)**
+- `ProviderStatusBanner` component in `src/components/SettingsPanel.tsx`
+  (mounted as the first section in the panel).
+- Polls `GET /api/status` and `GET /api/deepseek/status` every 15 s; renders
+  a coloured pulse dot per provider (green = `ACTIVE`, dim = `MISSING`) plus
+  a `N/5 live` summary pill in the header.
+- Each missing row exposes an inline **+ Add key** button. Clicking expands a
+  one-row form (env-name + value inputs, eye/eye-off reveal toggle, link to
+  the provider's key-issuance page, hint text).
+- **Real action, not words:** Save POSTs to `POST /api/kernel/env-keys` with
+  `autoSuffix:true` so the key is written to `.env.local` (chmod 0600), live
+  `process.env` is updated in the same request, the key is round-trip
+  validated by `keyValidatorService.validateKey`, and rejected keys are
+  surgically removed before they pollute the pool. No restart required.
+- After save, the banner re-probes `/api/status` so the pill flips to green
+  immediately (≤ 400 ms).
+- Existing per-provider password inputs in the **Neural Core Pulse** section
+  remain — those are the per-browser `customKeys` overlay (passed in chat
+  request body, persisted to `localStorage`), which is a different mechanism
+  from the server-persistent `.env.local` flow handled by this banner.
+
+**Files**
+- `src/components/SettingsPanel.tsx` — `ProviderStatusBanner` (new),
+  mounted at the top of the panel.
 
 ---
 
@@ -371,15 +424,17 @@ When several tool calls happen in rapid sequence they collapse into a summary:
 
 ### Phase 13 Execution Order
 
-| Step | Depends on | Effort  |
-|------|------------|---------|
-| 13.1 Action Cards      | —      | Large  |
-| 13.2 Thinking Block    | 13.1   | Medium |
-| 13.3 File Viewer/Diff  | 13.1   | Small  |
-| 13.4 Phase Narration   | 13.1–2 | Medium |
-| 13.5 Screenshots       | 13.1   | Small  |
-| 13.6 Suggestion Cards  | 13.1   | Small  |
-| 13.7 Action Groups     | 13.1   | Medium |
+| Step | Depends on | Effort  | Status |
+|------|------------|---------|--------|
+| 13.1 Action Cards         | —      | Large  | ✅ |
+| 13.2 Thinking Block       | 13.1   | Medium | ✅ |
+| 13.3 File Viewer/Diff     | 13.1   | Small  | ✅ |
+| 13.4 Phase Narration      | 13.1–2 | Medium | ✅ |
+| 13.5 Screenshots          | 13.1   | Small  | ✅ |
+| 13.6 Suggestion Cards     | 13.1   | Small  | ✅ |
+| 13.7 Action Groups        | 13.1   | Medium | ✅ |
+| 13.8 Provider Status Banner | —    | Small  | ✅ |
 
 Steps 13.3, 13.5, 13.6 can be parallelised once 13.1 is done.
 13.7 is a polish pass on top of 13.1.
+13.8 is independent (Settings panel only — no dependency on 13.1).
