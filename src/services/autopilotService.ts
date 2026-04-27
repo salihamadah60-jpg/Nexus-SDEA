@@ -39,6 +39,12 @@ interface SessionProcess {
   projectDir: string;
   installAttempts: number;
   startAttempts: number;
+  // Loop Guard (Phase 12.5): captures the dev process's recent stderr so
+  // we can compute a "failure signature" on close. If two consecutive
+  // start attempts crash with the SAME signature, the autopilot aborts
+  // immediately instead of burning the full MAX_ATTEMPTS on the same bug.
+  recentStderr: string;
+  lastFailureSig: string | null;
 }
 
 const activeProcesses = new Map<string, SessionProcess>();
@@ -324,7 +330,7 @@ async function triggerInstallAndRun(
   if (!sessionState) {
     const preferred = await getPreferredPort(projectDir);
     const { port } = await acquirePort({ preferred, killOccupant: true });
-    sessionState = { devProcess: null, status: "IDLE", port, projectDir, installAttempts: 0, startAttempts: 0 };
+    sessionState = { devProcess: null, status: "IDLE", port, projectDir, installAttempts: 0, startAttempts: 0, recentStderr: "", lastFailureSig: null };
     activeProcesses.set(sessionId, sessionState);
   }
 
@@ -456,7 +462,7 @@ async function startDevServer(
   if (!sessionState) {
     const preferred = await getPreferredPort(projectDir);
     const { port } = await acquirePort({ preferred, killOccupant: true });
-    sessionState = { devProcess: null, status: "IDLE", port, projectDir, installAttempts: 0, startAttempts: 0 };
+    sessionState = { devProcess: null, status: "IDLE", port, projectDir, installAttempts: 0, startAttempts: 0, recentStderr: "", lastFailureSig: null };
     activeProcesses.set(sessionId, sessionState);
   }
 
@@ -539,6 +545,8 @@ async function startDevServer(
     dev.stderr?.on("data", (data) => {
       const output = data.toString();
       broadcast(`\x1b[33m[DEV] ${output}\x1b[0m`, sessionId, undefined, "journal");
+      // Loop Guard: keep last 4 KB of stderr so we can fingerprint the failure on close.
+      sessionState!.recentStderr = (sessionState!.recentStderr + output).slice(-4096);
       if (output.includes("EADDRINUSE")) {
         broadcast(`\x1b[33m[AUTOPILOT] Port ${sessionState!.port} taken. Identifying & freeing...\x1b[0m\r\n`, sessionId, undefined, "journal");
         dev.kill("SIGTERM");
@@ -584,7 +592,34 @@ async function startDevServer(
         } else if (state.status === "STARTING") {
           // Died before becoming READY (TS errors, missing deps, etc.)
           state.startAttempts++;
-          if (state.startAttempts >= MAX_ATTEMPTS) {
+
+          // Loop Guard: compute a coarse signature of THIS crash by extracting
+          // error/throw lines from the captured stderr, stripping volatile bits
+          // (paths, line:col numbers, ports, timestamps). If two consecutive
+          // attempts produce the same signature, the bug is deterministic —
+          // restarting again is pure waste, so we abort and surface it.
+          const errLines = state.recentStderr
+            .split(/\r?\n/)
+            .filter(l => /error|throw|cannot|missing|failed|undefined|exception/i.test(l))
+            .slice(-6)
+            .join("\n");
+          const sig = errLines
+            .replace(/[A-Za-z]:\\[\S]+|\/[\S]+/g, "<path>")
+            .replace(/:\d+:\d+/g, "")
+            .replace(/\b\d{2,}\b/g, "<n>")
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, 400);
+
+          const repeatedFailure = sig.length > 20 && sig === state.lastFailureSig;
+          state.lastFailureSig = sig;
+          state.recentStderr = "";
+
+          if (repeatedFailure) {
+            state.status = "ERROR";
+            broadcast(`\x1b[31m[AUTOPILOT][LOOP-GUARD] Same failure signature on attempts ${state.startAttempts - 1} and ${state.startAttempts}. Aborting retries — the bug is deterministic and needs a real fix, not another restart.\x1b[0m\r\n`, sessionId, undefined, "journal");
+            broadcast(`\x1b[31m[AUTOPILOT][LOOP-GUARD] Signature: ${sig}\x1b[0m\r\n`, sessionId, undefined, "journal");
+          } else if (state.startAttempts >= MAX_ATTEMPTS) {
             state.status = "ERROR";
             broadcast(`\x1b[31m[AUTOPILOT] Dev server crashed ${MAX_ATTEMPTS} times during startup. Status → ERROR.\x1b[0m\r\n`, sessionId, undefined, "journal");
           } else {

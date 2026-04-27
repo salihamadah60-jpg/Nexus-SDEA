@@ -1,5 +1,18 @@
 # Nexus AI Sovereign IDE v8.0 — Silent Operator
 
+## Phase 13.1 — Quality Bar, Loop Guard, Manifest Healer (2026-04-27)
+
+| # | Fix | Files | Summary |
+|---|-----|-------|---------|
+| 1 | **`autoFixCommand` heals "Missing script: test"** | `src/services/aiService.ts` | When a generated project crashes with `npm ERR! Missing script: "test"`, the autoFixCommand now reads the project's `package.json`, injects `"test": "vitest run"` (and adds `vitest@^2.1.4` to devDependencies if absent), and re-runs the test command. Replaces a previous infinite "test → fail → test" loop. |
+| 2 | **Real React stub generation** | `src/services/importReifierService.ts` | `generateStub()` for `.tsx`/`.jsx` paths now emits a real default-exported React component returning `null` (not `export {};`), so missing-import auto-stubbing no longer breaks Vite's React refresh boundary check. |
+| 3 | **No-op file-write guard** | `src/services/aiService.ts` | Before writing a file the AI proposed, the orchestrator reads the existing content; if it's byte-identical to the new content the write is skipped. This prevents chokidar from triggering a Vite restart loop when the AI re-emits the same file across self-correction passes. |
+| 4 | **Vitest baked into scaffold** | `src/services/scaffoldService.ts` | The `react-vite` template now ships with `vitest@^2.1.4`, a `vitest.config.ts` (jsdom env + setup file), and `"test": "vitest run"` in package.json, so a freshly scaffolded project never crashes on the test gate. |
+| 5 | **Manifest Healer service** | `src/services/manifestHealerService.ts` (new), `src/services/aiService.ts` | After every AI write batch, `healManifest(projectDir)` runs *before* diagnostics: ensures `"type": "module"`, bumps `vite` to `^6.2.0` if `<5`, deletes any stray `tailwind.config.{js,ts,cjs}` (Tailwind v4 reads tokens from CSS `@theme`, not JS), strips broken `@import "tailwindcss/v4"` lines, and rewrites server.port from `5000` (reserved for the IDE itself) to `3001`. Eliminates the most common AI-generated boot crashes without another LLM round-trip. |
+| 6 | **Loop Guard in Autopilot** | `src/services/autopilotService.ts` | `SessionProcess` now captures the dev process's last 4 KB of stderr. On each crash during STARTING, the close handler distills error/throw lines into a normalized signature (paths/numbers/timestamps stripped). If two consecutive attempts share the same signature, autopilot aborts with `[LOOP-GUARD]` instead of burning all `MAX_ATTEMPTS` on the same deterministic bug. |
+| 7 | **Quality Bar in System Prompt** | `src/services/aiService.ts` (`buildSystemPrompt`) | Added a non-negotiable Quality Bar with a forbidden-output blacklist ("Streamline Your Workflow", 17-line Heros, flat solid sections, hardcoded `bg-primary` without `@theme`) and a 10-point checklist (specific copy with numbers, 4-6 brand colors in `@theme`, 6+ rich sections, framer-motion entrance + scroll animations, lucide icons everywhere, gradient depth, responsive breakpoints, semantic HTML, working interactivity, minimum component sizes). Stack rules now explicitly forbid `vite@^4`, require `"type": "module"`, and forbid hand-written `tailwind.config.*` for Tailwind v4. |
+| 8 | **Healed broken sandbox** | `sandbox/projects/session-1777224332222-qvn7p4/` | Direct in-place repair of the user's stuck project: rewrote `package.json` with `"type":"module"` + `vite@^6.2.0` + framer-motion/lucide/clsx/tailwind-merge, removed the bad `tailwind.config.js`, deleted stale `node_modules` and `package-lock.json` so a clean install can run. |
+
 ## Phase 13 — Chat UX & Preview Fixes (2026-04-27)
 
 | # | Fix | Files | Summary |
