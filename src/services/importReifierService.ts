@@ -114,12 +114,14 @@ function generateStub(stubPath: string, namedImports: string[]): string {
     `// This file was imported but not yet authored. Replace with real implementation.`,
   ];
 
+  const isReact = ext === ".tsx" || ext === ".jsx";
+
   if (namedImports.length > 0) {
     // Export each named symbol as a typed stub so the consumer compiles
     for (const name of namedImports) {
       if (/^[A-Z]/.test(name)) {
         // Looks like a React component or class
-        if (ext === ".tsx" || ext === ".jsx") {
+        if (isReact) {
           lines.push(`export const ${name} = () => null;`);
         } else {
           lines.push(`export const ${name} = {} as any;`);
@@ -128,7 +130,22 @@ function generateStub(stubPath: string, namedImports: string[]): string {
         lines.push(`export const ${name}: any = undefined;`);
       }
     }
-    lines.push(`export default {} as any;`);
+    if (isReact) {
+      // React modules are usually default-imported. Provide a real
+      // null-rendering component so the consumer doesn't blow up at runtime.
+      const compName = path.basename(stubPath).replace(/\.(t|j)sx?$/i, "") || "Stub";
+      lines.push(`const ${compName}Stub = () => null;`);
+      lines.push(`export default ${compName}Stub;`);
+    } else {
+      lines.push(`export default {} as any;`);
+    }
+  } else if (isReact) {
+    // No named imports detected — but it's a React file. Default-export a
+    // null component so the consumer renders cleanly instead of crashing
+    // with "X is not a function" at the import site.
+    const compName = path.basename(stubPath).replace(/\.(t|j)sx?$/i, "") || "Stub";
+    lines.push(`const ${compName}Stub = () => null;`);
+    lines.push(`export default ${compName}Stub;`);
   } else {
     lines.push(`export {};`);
   }

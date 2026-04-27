@@ -185,6 +185,15 @@ function parseNexusResponse(text: string, sessionId?: string, turn?: number): Pa
 function autoFixCommand(cmd: string, errorOutput: string, retryCount: number): string | null {
   const lower = errorOutput.toLowerCase();
 
+  // ── npm test with no script ────────────────────────────────────────────
+  // This was the #1 cause of an infinite Reviewer→reinstall loop: AI runs
+  // `npm test`, package.json has no "test" script, npm exits 1, the
+  // self-corrector reinstalls jest, runs `npm test` again → forever.
+  // Heal once: inject a `test` script and re-run via vitest.
+  if (/^\s*npm\s+(run\s+)?test\b/.test(cmd) && lower.includes('missing script') && retryCount === 0) {
+    return `node -e "const fs=require('fs'),p='package.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));j.scripts=j.scripts||{};if(!j.scripts.test){j.scripts.test='vitest run --passWithNoTests';fs.writeFileSync(p,JSON.stringify(j,null,2));}" && npm exec --yes -- vitest run --passWithNoTests`;
+  }
+
   // ── npm install failures ──────────────────────────────────────────────────
   if (cmd.includes('npm install')) {
     if (!cmd.includes('--legacy-peer-deps') &&
@@ -1004,6 +1013,16 @@ export function createChatHandler(broadcast: (data: string, sid?: string) => voi
           const sanitizedContent = file.path.endsWith('.css')
             ? sanitizeCssContent(file.content)
             : file.content;
+          // No-op write guard: if the file content is unchanged, skip the write.
+          // Re-writing identical bytes still bumps the mtime, which makes Vite
+          // restart the dev server and triggers a Reviewer cycle — the second
+          // major source of the infinite-loop behaviour.
+          if (beforeContent && beforeContent === sanitizedContent.slice(0, 20000) &&
+              sanitizedContent.length <= 20000) {
+            fileResults.push({ path: file.path, size: file.content.length });
+            send({ nexus_file_write: { path: file.path, size: file.content.length, beforeContent, unchanged: true } });
+            continue;
+          }
           await fs.writeFile(targetPath, sanitizedContent);
 
           // Fix 13.P — ensure any vite.config.ts always has the Replit proxy settings

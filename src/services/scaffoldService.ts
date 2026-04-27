@@ -35,7 +35,8 @@ export async function scaffoldProject(sessionId: string, options: ScaffoldOption
       scripts: {
         dev: "vite --host 0.0.0.0",
         build: "tsc && vite build",
-        preview: "vite preview"
+        preview: "vite preview",
+        test: "vitest run --passWithNoTests"
       },
       dependencies: {
         react: "^18.3.1",
@@ -52,9 +53,27 @@ export async function scaffoldProject(sessionId: string, options: ScaffoldOption
         "typescript": "~5.4.0",
         "vite": "^6.2.0",
         "tailwindcss": "^4.0.0",
-        "@tailwindcss/vite": "^4.0.0"
+        "@tailwindcss/vite": "^4.0.0",
+        "vitest": "^2.1.0",
+        "jsdom": "^25.0.0",
+        "@testing-library/react": "^16.0.0",
+        "@testing-library/jest-dom": "^6.5.0"
       }
     }, null, 2);
+
+    // Vitest config so `npm test` works out of the box (kills the
+    // "Missing script: test" → reinstall-jest infinite loop).
+    files["vitest.config.ts"] = `import { defineConfig } from 'vitest/config';
+import react from '@vitejs/plugin-react';
+
+export default defineConfig({
+  plugins: [react()],
+  test: {
+    globals: true,
+    environment: 'jsdom',
+    passWithNoTests: true,
+  },
+});`;
 
     files["index.html"] = `<!DOCTYPE html>
 <html lang="en">
