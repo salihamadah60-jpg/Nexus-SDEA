@@ -127,6 +127,8 @@ export interface IDEState {
   budgetUsd: number;        // 0 = disabled
   budgetTokens: number;     // 0 = disabled
   pausedSessions: Record<string, boolean>;
+  // Phase 13.14 — Silent auto-pause once a threshold is crossed.
+  budgetAutoPause: boolean;
 }
 
 export interface NexusEvent {

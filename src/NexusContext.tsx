@@ -39,9 +39,9 @@ const INITIAL_STATE: IDEState = {
   sessions: [],
   currentSessionId: null,
   previewVersion: 0,
-  selectedModel: MODELS[0].id,
-  selectedMode: MODES[0].id,
-  theme: 'sovereign-dark',
+  selectedModel: (typeof window !== 'undefined' && localStorage.getItem('nexus.selectedModel')) || MODELS[0].id,
+  selectedMode:  (typeof window !== 'undefined' && localStorage.getItem('nexus.selectedMode'))  || MODES[0].id,
+  theme:         (typeof window !== 'undefined' && localStorage.getItem('nexus.theme'))         || 'sovereign-dark',
   systemStatus: { database: 'LOADING', gemini: 'LOADING', groq: 'LOADING', github: 'LOADING', hf: 'LOADING' },
   tasks: [],
   activeTaskId: null,
@@ -58,6 +58,12 @@ const INITIAL_STATE: IDEState = {
   pausedSessions: (typeof window !== 'undefined'
     ? (() => { try { return JSON.parse(localStorage.getItem('nexus.pausedSessions') || '{}'); } catch { return {}; } })()
     : {}),
+  // Phase 13.14 — Silent auto-pause toggle. Defaults ON so the guardrail
+  // actually does something on first install; user can flip it OFF in
+  // Settings → Budget Guardrails.
+  budgetAutoPause: typeof window !== 'undefined'
+    ? (localStorage.getItem('nexus.budgetAutoPause') !== '0')
+    : true,
 };
 
 export function NexusProvider({ children }: { children: React.ReactNode }) {
@@ -793,6 +799,26 @@ export function NexusProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     try { localStorage.setItem('nexus.pausedSessions', JSON.stringify(state.pausedSessions || {})); } catch {}
   }, [state.pausedSessions]);
+  // Phase 13.14 — persist auto-pause toggle.
+  useEffect(() => {
+    try { localStorage.setItem('nexus.budgetAutoPause', state.budgetAutoPause ? '1' : '0'); } catch {}
+  }, [state.budgetAutoPause]);
+
+  // Persist UI preferences across reloads — user-selected theme, default
+  // model, default mode. These used to silently reset to defaults on every
+  // page load, which made the Settings panel feel broken.
+  useEffect(() => {
+    try { localStorage.setItem('nexus.theme', state.theme); } catch {}
+  }, [state.theme]);
+  useEffect(() => {
+    try { localStorage.setItem('nexus.selectedModel', state.selectedModel); } catch {}
+  }, [state.selectedModel]);
+  useEffect(() => {
+    try { localStorage.setItem('nexus.selectedMode', state.selectedMode); } catch {}
+  }, [state.selectedMode]);
+  useEffect(() => {
+    try { localStorage.setItem('nexus.lang', state.language); } catch {}
+  }, [state.language]);
 
   return (
     <NexusContext.Provider value={{

@@ -781,6 +781,46 @@ export function SettingsPanel() {
             {state.budgetTokens > 0 && <span className="text-nexus-cyan">{state.budgetTokens.toLocaleString()} tok</span>}
           </p>
         )}
+
+        {/* Auto-pause toggle (Phase 13.14) */}
+        <button
+          onClick={() => setState(prev => ({ ...prev, budgetAutoPause: !prev.budgetAutoPause }))}
+          className={cn(
+            'mt-3 w-full flex items-center justify-between gap-3 rounded-xl border px-3 py-2.5 transition-all text-left',
+            state.budgetAutoPause
+              ? 'bg-amber-500/10 border-amber-500/30'
+              : 'bg-white/[0.02] border-white/5 hover:border-white/10'
+          )}
+          aria-pressed={state.budgetAutoPause}
+        >
+          <div className="flex flex-col min-w-0">
+            <span className={cn(
+              'text-[10px] font-black uppercase tracking-[0.2em]',
+              state.budgetAutoPause ? 'text-amber-300' : 'text-text-main'
+            )}>
+              Auto-pause when threshold is hit
+            </span>
+            <span className="text-[9px] text-text-dim/60 mt-0.5 leading-snug">
+              {state.budgetAutoPause
+                ? 'On — sessions pause silently the moment a limit is reached.'
+                : 'Off — only a warning banner appears; pause is manual.'}
+            </span>
+          </div>
+          <div
+            className={cn(
+              'shrink-0 relative w-9 h-5 rounded-full transition-colors',
+              state.budgetAutoPause ? 'bg-amber-500/70' : 'bg-white/10'
+            )}
+          >
+            <div
+              className={cn(
+                'absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-md transition-all',
+                state.budgetAutoPause ? 'left-[18px]' : 'left-0.5'
+              )}
+            />
+          </div>
+        </button>
+
         {Object.keys(state.pausedSessions || {}).length > 0 && (
           <div className="mt-2 p-2 rounded-lg bg-red-500/5 border border-red-500/20">
             <p className="text-[9px] font-bold uppercase tracking-widest text-red-300/80 mb-1.5">

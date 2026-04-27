@@ -439,11 +439,24 @@ first key, leaving missing providers invisible). This banner stays.
 | 13.11 Terminal Theme Picker — click + mobile sheet | — | Small | ✅ |
 | 13.12 Truncated NEXUS sentinel sanitization | — | Small | ✅ |
 | 13.13 Live Preview proxy fix (prefix-strip + asset interceptor) | — | Medium | ✅ |
+| 13.14 Auto-pause toggle + persist UI prefs (theme/model/mode/lang) | 13.9 | Small | ✅ |
 
 Steps 13.3, 13.5, 13.6 can be parallelised once 13.1 is done.
 13.7 is a polish pass on top of 13.1.
 13.8 is independent (Settings panel only — no dependency on 13.1).
 13.9–13.13 are independent and were shipped together as the Phase 13 hardening pass.
+
+### Phase 13.14 — Auto-pause + UI Preference Persistence
+
+| File | Change |
+|------|--------|
+| `src/types.ts`                       | Add `budgetAutoPause: boolean` to `IDEState` |
+| `src/NexusContext.tsx`               | Hydrate `theme`, `selectedModel`, `selectedMode`, `language`, `budgetAutoPause` from `localStorage` and persist on every change |
+| `src/components/SettingsPanel.tsx`   | New toggle "Auto-pause when threshold is hit" (defaults ON) |
+| `src/components/ChatPanel.tsx`       | `BudgetBanner` watches threshold crossings and silently flips the session to paused when `budgetAutoPause` is on; one notification on transition only |
+
+Resolved: UI theme + Terminal theme + default model/mode/language all
+survive page reloads. Settings no longer feels broken on revisit.
 
 ### Phase 13.9 — Budget Guardrails
 

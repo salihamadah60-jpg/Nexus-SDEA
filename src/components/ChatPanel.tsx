@@ -939,7 +939,7 @@ function CostBadge({ sessionId }: { sessionId: string }) {
 // session USD spend has crossed its configured threshold (Settings →
 // Budget Guardrails). When paused, Send is hard-blocked in the context.
 function BudgetBanner({ sessionId }: { sessionId: string }) {
-  const { state, setState } = useNexus();
+  const { state, setState, addNotification } = useNexus();
   const cost = useSessionCost(sessionId);
   const tokenLimit = state.budgetTokens || 0;
   const usdLimit   = state.budgetUsd    || 0;
@@ -948,7 +948,6 @@ function BudgetBanner({ sessionId }: { sessionId: string }) {
   const overTokens = tokenLimit > 0 && tokens >= tokenLimit;
   const overUsd    = usdLimit   > 0 && usd    >= usdLimit;
   const paused     = !!state.pausedSessions[sessionId];
-  if (!paused && !overTokens && !overUsd) return null;
 
   const setPaused = (next: boolean) => {
     setState(prev => {
@@ -957,6 +956,27 @@ function BudgetBanner({ sessionId }: { sessionId: string }) {
       return { ...prev, pausedSessions: map };
     });
   };
+
+  // Phase 13.14 — Silent auto-pause: when the user has the toggle ON and
+  // a threshold is crossed, flip the session to paused automatically. We
+  // only fire when transitioning from below→above, and only once (paused
+  // gate + ref-stable callback). The user can still resume manually.
+  const autoPauseFiredRef = useRef(false);
+  useEffect(() => {
+    if (!state.budgetAutoPause) { autoPauseFiredRef.current = false; return; }
+    if (paused) return;
+    if (!overTokens && !overUsd) { autoPauseFiredRef.current = false; return; }
+    if (autoPauseFiredRef.current) return;
+    autoPauseFiredRef.current = true;
+    setPaused(true);
+    const reason =
+      overUsd && overTokens ? `$${usd.toFixed(4)} & ${tokens.toLocaleString()} tok` :
+      overUsd               ? `$${usd.toFixed(4)} ≥ $${usdLimit.toFixed(2)}` :
+                              `${tokens.toLocaleString()} ≥ ${tokenLimit.toLocaleString()} tok`;
+    addNotification('warning', 'Session auto-paused — budget reached', reason);
+  }, [overTokens, overUsd, paused, state.budgetAutoPause, usd, tokens, usdLimit, tokenLimit]);
+
+  if (!paused && !overTokens && !overUsd) return null;
 
   const reasons: string[] = [];
   if (overUsd)    reasons.push(`$${usd.toFixed(4)} ≥ $${usdLimit.toFixed(2)}`);
