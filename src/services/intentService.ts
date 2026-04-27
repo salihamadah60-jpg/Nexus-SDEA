@@ -33,6 +33,21 @@ const QUESTION_MARKERS = [
   /^\s*(ما|ماذا|لماذا|كيف|متى|أين|من|هل)\b/,
 ];
 
+/**
+ * Fix 13.P — Short build confirmations.
+ *
+ * When a user replies "yes", "ok", "go ahead", "continue", "add it", etc.
+ * after Nexus has partially built something, the intent was always BUILD
+ * (resume/extend the work).  The generic short-message fallback was
+ * incorrectly classifying these as "question", causing Nexus to reply with
+ * a single prose sentence instead of writing the remaining files.
+ *
+ * These tokens are matched BEFORE the QUESTION_MARKERS check so they take
+ * priority and receive the full Sovereign BUILD directive.
+ */
+const BUILD_CONFIRMATIONS =
+  /^\s*(yes|yeah|yep|yup|sure|ok|okay|go|go ahead|continue|proceed|confirm|do it|build it|implement it|add it|fix it|make it|keep going|finish it|do that|perfect|exactly|correct|right|absolutely|definitely|اكمل|نعم|تمام|صح|بالضبط)\s*[!.,]?\s*$/i;
+
 export function classifyIntent(message: string): Intent {
   const m = (message || "").trim();
   if (!m) return "smalltalk";
@@ -48,6 +63,9 @@ export function classifyIntent(message: string): Intent {
   const buildHits = BUILD_TRIGGERS.filter(r => r.test(m)).length;
   if (buildHits >= 2) return "build";
   if (buildHits === 1 && m.length > 30) return "build";
+
+  // Build confirmations take priority over the question check
+  if (BUILD_CONFIRMATIONS.test(m)) return "build";
 
   if (QUESTION_MARKERS.some(r => r.test(m))) return "question";
 

@@ -217,6 +217,15 @@ A line flips to ✅ only when **all three** are true:
 
 ---
 
+### Phase 13 — Preview & Operation Permanent Fixes (April 2026) ✅
+
+| Fix | Root Cause | Files Changed |
+|-----|-----------|---------------|
+| **13.P1** READY only after HTTP probe | `performVisualAudit` set `status=READY` before verification — UI showed "READY" with blank iframe | `autopilotService.ts` |
+| **13.P2** Vite crash retry | `dev.on("close")` silently went `STARTING→IDLE` with no retry when Vite exited during startup | `autopilotService.ts` |
+| **13.P3** vite.config.ts enforcer | AI-written configs never included `allowedHosts:true` / `hmr:{clientPort:443}` — Replit proxy rejected the iframe | `autopilotService.ts`, `aiService.ts` |
+| **13.P4** Confirmation = BUILD | "yes"/"ok"/"continue" classified as `question` → Nexus answered with prose instead of writing files | `intentService.ts` |
+
 ### Hotfixes applied post stress-test (April 2026) ✅
 
 | Fix | File(s) | Detail |

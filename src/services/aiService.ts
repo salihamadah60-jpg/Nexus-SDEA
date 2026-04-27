@@ -12,7 +12,7 @@ import { e2bManager } from "./e2bService.js";
 import { Session } from "../models/Schemas.js";
 import mongoose from "mongoose";
 import { SANDBOX_BASE } from "../config/backendConstants.js";
-import { triggerSessionBoot } from "./autopilotService.js";
+import { triggerSessionBoot, patchViteConfig } from "./autopilotService.js";
 import { lookupPattern, injectLesson } from "./vaultService.js";
 import { validatePath } from "./guardService.js";
 import { generateTaskId, logHistory } from "./historyService.js";
@@ -1005,6 +1005,12 @@ export function createChatHandler(broadcast: (data: string, sid?: string) => voi
             ? sanitizeCssContent(file.content)
             : file.content;
           await fs.writeFile(targetPath, sanitizedContent);
+
+          // Fix 13.P — ensure any vite.config.ts always has the Replit proxy settings
+          if (path.basename(file.path) === 'vite.config.ts') {
+            await patchViteConfig(targetPath);
+          }
+
           fileResults.push({ path: file.path, size: file.content.length });
           send({ nexus_file_write: { path: file.path, size: file.content.length, beforeContent } });
           

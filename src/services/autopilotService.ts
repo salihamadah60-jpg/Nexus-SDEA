@@ -576,9 +576,25 @@ async function startDevServer(
       if (activeProcesses.get(sessionId)?.devProcess === dev) {
         const state = activeProcesses.get(sessionId)!;
         state.devProcess = null;
+
         if (state.status === "READY") {
+          // Was healthy, crashed — allow chokidar to restart it on next file change
           state.status = "IDLE";
           state.startAttempts = 0;
+        } else if (state.status === "STARTING") {
+          // Died before becoming READY (TS errors, missing deps, etc.)
+          state.startAttempts++;
+          if (state.startAttempts >= MAX_ATTEMPTS) {
+            state.status = "ERROR";
+            broadcast(`\x1b[31m[AUTOPILOT] Dev server crashed ${MAX_ATTEMPTS} times during startup. Status → ERROR.\x1b[0m\r\n`, sessionId, undefined, "journal");
+          } else {
+            state.status = "IDLE";
+            broadcast(`\x1b[33m[AUTOPILOT] Dev server crashed during startup (attempt ${state.startAttempts}/${MAX_ATTEMPTS}). Retrying in 5 s...\x1b[0m\r\n`, sessionId, undefined, "journal");
+            setTimeout(() => {
+              const s = activeProcesses.get(sessionId);
+              if (s && s.status === "IDLE") startDevServer(sessionId, projectDir, broadcast);
+            }, 5_000);
+          }
         }
       }
     });
@@ -597,7 +613,9 @@ async function startDevServer(
 
 /**
  * Sovereign Visual Audit Protocol
- * Fix 5 (Visual Audit Fail): early exit when no browser is available, max 3 retries.
+ * Fix 5  (Visual Audit Fail): early exit when no browser is available, max 3 retries.
+ * Fix 13.P (Preview READY gate): status is NEVER set to READY before the HTTP probe
+ *   confirms something is actually serving. This eliminates the "READY but blank" state.
  */
 async function performVisualAudit(
   sessionId: string,
@@ -608,18 +626,50 @@ async function performVisualAudit(
   const sessionState = activeProcesses.get(sessionId);
   if (!sessionState) return;
 
-  sessionState.status = "READY";
-  sessionState.startAttempts = 0;
-
+  // Do NOT set status=READY here — that happens only after HTTP probe succeeds below.
   const targetUrl = `http://localhost:${port}`;
 
-  const verified = await verifyPreviewReady(targetUrl, 10, 1000);
-  if (verified) {
+  broadcast(`\x1b[36m[AUTOPILOT] HTTP probe: waiting for ${targetUrl} to respond...\x1b[0m\r\n`, sessionId, undefined, "journal");
+  // Up to 20 attempts × 1.5 s = 30 s grace window for slow npm installs + Vite cold start
+  const verified = await verifyPreviewReady(targetUrl, 20, 1500);
+
+  if (!verified) {
+    // Process may have died — check
+    if (!sessionState.devProcess || sessionState.devProcess.exitCode !== null) {
+      broadcast(`\x1b[31m[AUTOPILOT] Dev server exited before becoming ready. Scheduling retry...\x1b[0m\r\n`, sessionId, undefined, "journal");
+      // Let the close handler deal with the retry; just mark as IDLE here.
+      if (sessionState.status === "STARTING") {
+        sessionState.status = "IDLE";
+        sessionState.devProcess = null;
+      }
+    } else {
+      broadcast(`\x1b[33m[AUTOPILOT] Preview not responding on ${targetUrl} after 30 s. Scheduling retry...\x1b[0m\r\n`, sessionId, undefined, "journal");
+      // Schedule one more probe pass 15 s later (Vite + large node_modules can be slow)
+      setTimeout(async () => {
+        const s = activeProcesses.get(sessionId);
+        if (s && s.status === "STARTING") {
+          const retry = await verifyPreviewReady(targetUrl, 10, 2000);
+          if (retry) {
+            s.status = "READY";
+            s.startAttempts = 0;
+            broadcast(`__REFRESH_PREVIEW__`, sessionId, undefined, "journal");
+            broadcast(`__OPEN_PREVIEW__`, sessionId, undefined, "journal");
+            broadcast(`\x1b[32m[AUTOPILOT] Preview confirmed (delayed) at ${targetUrl}.\x1b[0m\r\n`, sessionId, undefined, "journal");
+          } else {
+            s.status = "ERROR";
+            broadcast(`\x1b[31m[AUTOPILOT] Preview failed to respond. Status → ERROR. Use Boot button to retry.\x1b[0m\r\n`, sessionId, undefined, "journal");
+          }
+        }
+      }, 15_000);
+    }
+    // Fall through to visual audit attempt regardless
+  } else {
+    // ── Probe passed: only NOW promote to READY ────────────────────────────
+    sessionState.status = "READY";
+    sessionState.startAttempts = 0;
     broadcast(`__REFRESH_PREVIEW__`, sessionId, undefined, "journal");
     broadcast(`__OPEN_PREVIEW__`, sessionId, undefined, "journal");
     broadcast(`\x1b[32m[AUTOPILOT] Preview verified at ${targetUrl} — opening.\x1b[0m\r\n`, sessionId, undefined, "journal");
-  } else {
-    broadcast(`\x1b[33m[AUTOPILOT] Preview not yet responding on ${targetUrl}. Monitoring continues.\x1b[0m\r\n`, sessionId, undefined, "journal");
   }
 
   // Fix 5: Reduced from 10 to 3 audit attempts, and bail immediately if no browser found.
@@ -659,6 +709,51 @@ async function performVisualAudit(
 
 export function getSessionData(sessionId: string) {
   return activeProcesses.get(sessionId);
+}
+
+/**
+ * Fix 13.P — Vite config enforcer.
+ *
+ * Whenever the AI writes a vite.config.ts into a sandbox, it often omits
+ * the three settings Replit's mTLS iframe proxy REQUIRES:
+ *   • server.host: '0.0.0.0'   — binds to all interfaces, not just 127.0.0.1
+ *   • server.allowedHosts: true — accepts requests from the replit.dev domain
+ *   • server.hmr.clientPort: 443 — tells Vite's HMR WS to use the HTTPS port
+ *
+ * This function is called after any vite.config.ts file write.  It does a
+ * text-level patch (no AST needed) to inject these values if absent, then
+ * overwrites the file in place. Safe to call on scaffold-generated configs too.
+ */
+export async function patchViteConfig(filePath: string): Promise<void> {
+  try {
+    let src = await fs.readFile(filePath, "utf-8");
+
+    // Already fully patched — nothing to do
+    if (src.includes("allowedHosts") && src.includes("hmr") && src.includes("clientPort")) return;
+
+    // Strategy: find the server: { ... } block and inject missing fields.
+    // If there is no server block at all, append one before the closing `})`.
+
+    const serverBlockRe = /server\s*:\s*\{([^}]*)\}/s;
+    const serverMatch = serverBlockRe.exec(src);
+
+    if (serverMatch) {
+      let block = serverMatch[1];
+      if (!/host\s*:/.test(block))         block += `\n    host: '0.0.0.0',`;
+      if (!/allowedHosts\s*:/.test(block)) block += `\n    allowedHosts: true,`;
+      if (!/hmr\s*:/.test(block))          block += `\n    hmr: { clientPort: 443 },`;
+      src = src.replace(serverBlockRe, `server: {${block}}`);
+    } else {
+      // No server block — inject one before the final closing `})`
+      const serverBlock = `\n  server: {\n    host: '0.0.0.0',\n    allowedHosts: true,\n    hmr: { clientPort: 443 },\n  },\n`;
+      src = src.replace(/\}\s*\)\s*;?\s*$/, `${serverBlock}});\n`);
+    }
+
+    await fs.writeFile(filePath, src, "utf-8");
+    console.log(`[AUTOPILOT] Patched vite.config.ts with Replit proxy settings: ${filePath}`);
+  } catch (err: any) {
+    console.warn(`[AUTOPILOT] Could not patch vite.config.ts at ${filePath}: ${err.message}`);
+  }
 }
 
 export async function triggerSessionBoot(
