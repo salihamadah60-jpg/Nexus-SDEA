@@ -212,16 +212,34 @@ async function bootstrap() {
     res.sendFile(target);
   });
 
-  // 3.2 Sovereign Proxy Layer (Native Preview Architecture - v7.5)
+  // 3.2 Sovereign Proxy Layer (Native Preview Architecture — v8.0)
+  //
+  // Two cooperating handlers:
+  //
+  // (a) The explicit  /api/preview/:sessionId/...  proxy STRIPS the
+  //     /api/preview/<sid> prefix from the URL before forwarding so the
+  //     dev server (Vite, Next, http-server, …) sees the path it actually
+  //     expects ("/", "/src/main.tsx", …).  Without this strip, Vite
+  //     never matched any route and returned its SPA index.html for every
+  //     request → blank iframe.
+  //
+  // (b) An asset interceptor mounted just below this block forwards
+  //     Vite-internal asset requests (e.g. /src/foo.tsx, /@vite/client,
+  //     /node_modules/...) whose `Referer` originates inside a preview
+  //     iframe to that session's dev server.  This is what makes the
+  //     module graph load instead of 404'ing on the Nexus origin.
+  const VITE_ASSET_RE = /^\/(?:src|@vite|@id|@fs|@react-refresh|@vite-plugin|node_modules|__vite|@import-map)/;
+  const VITE_ASSET_EXT = /\.(?:m?jsx?|tsx?|css|s[ac]ss|svg|png|jpe?g|webp|gif|woff2?|ttf|otf|ico|json|map|wasm)(?:\?.*)?$/i;
+
   app.all("/api/preview/:sessionId*", (req, res) => {
-    const sessionId = req.params['sessionId' as any] || (req.params as any)['0'];
+    const sessionId = (req.params as any)['sessionId'];
+    if (!sessionId || /[/\\]/.test(sessionId)) {
+      return res.status(400).send("Bad session id");
+    }
     const session = getSessionData(sessionId);
-    
-    // If no session data yet, we initialize a default 3001 state for extraction
     if (!session) {
       return res.status(200).send(getLoadingHtml("Initializing Native Preview...", sessionId));
     }
-
     if (session.status !== "READY") {
       const statusMap = {
         "IDLE": "Warming up DNA...",
@@ -229,13 +247,41 @@ async function bootstrap() {
         "STARTING": "Native Boot: npx http-server...",
         "ERROR": "Critical Fault: Check Terminal logs"
       };
-      return res.status(200).send(getLoadingHtml(statusMap[session.status as keyof typeof statusMap] || "Processing...", sessionId));
+      return res.status(200).send(
+        getLoadingHtml(statusMap[session.status as keyof typeof statusMap] || "Processing...", sessionId)
+      );
     }
-
+    // Strip /api/preview/<sessionId> so the dev server sees the actual
+    // app path. originalUrl still has the prefix.
+    const prefix = `/api/preview/${sessionId}`;
+    const stripped = req.originalUrl.startsWith(prefix)
+      ? req.originalUrl.slice(prefix.length)
+      : req.originalUrl;
+    req.url = stripped || "/";
     const target = `http://localhost:${session.port || 3001}`;
     proxy.web(req, res, { target, changeOrigin: true, ignorePath: false }, (err) => {
       console.error(`[PROXY ERROR] Session ${sessionId} on ${target}:`, err.message);
-      res.status(200).send(getLoadingHtml("Neural Re-Syncing...", sessionId));
+      if (!res.headersSent) res.status(200).send(getLoadingHtml("Neural Re-Syncing...", sessionId));
+    });
+  });
+
+  // (b) Asset interceptor — forwards requests originating from inside a
+  //     preview iframe to the matching session's dev server. Mounted as
+  //     a regular middleware so it runs before Vite's middleware below.
+  app.use((req, res, next) => {
+    const referer = req.get("referer") || "";
+    const m = referer.match(/\/api\/preview\/([0-9a-zA-Z._-]+)/);
+    if (!m) return next();
+    // Don't hijack our own admin/api routes.
+    if (req.path.startsWith("/api/") && !VITE_ASSET_EXT.test(req.path)) return next();
+    if (!VITE_ASSET_RE.test(req.path) && !VITE_ASSET_EXT.test(req.path)) return next();
+    const sessionId = m[1];
+    const session = getSessionData(sessionId);
+    if (!session || session.status !== "READY") return next();
+    const target = `http://localhost:${session.port || 3001}`;
+    proxy.web(req, res, { target, changeOrigin: true, ignorePath: false }, (err) => {
+      console.error(`[ASSET-PROXY] ${req.method} ${req.url} -> ${target}: ${err.message}`);
+      if (!res.headersSent) next(err);
     });
   });
 

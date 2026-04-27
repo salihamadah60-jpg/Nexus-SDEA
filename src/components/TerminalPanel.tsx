@@ -23,8 +23,36 @@ export function TerminalPanel() {
   const { state, setState, switchTerminal, closeTerminal, socketsRef } = useNexus();
   const [isExpanded, setIsExpanded] = useState(false);
   const [isSplit, setIsSplit] = useState(false);
-  const [terminalTheme, setTerminalTheme] = useState<keyof typeof THEMES_CONFIG>('nexus');
+  const [terminalTheme, setTerminalTheme] = useState<keyof typeof THEMES_CONFIG>(() => {
+    if (typeof window === 'undefined') return 'nexus';
+    const saved = localStorage.getItem('nexus.terminalTheme') as keyof typeof THEMES_CONFIG | null;
+    return saved && saved in THEMES_CONFIG ? saved : 'nexus';
+  });
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [themeMenuOpen, setThemeMenuOpen] = useState(false);
+  const themePickerRef = useRef<HTMLDivElement>(null);
+
+  // Persist + close on outside click + Esc
+  useEffect(() => {
+    try { localStorage.setItem('nexus.terminalTheme', terminalTheme); } catch {}
+  }, [terminalTheme]);
+
+  useEffect(() => {
+    if (!themeMenuOpen) return;
+    const onDown = (e: MouseEvent | TouchEvent) => {
+      const el = themePickerRef.current;
+      if (el && !el.contains(e.target as Node)) setThemeMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setThemeMenuOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('touchstart', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('touchstart', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [themeMenuOpen]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrollRefSplit = useRef<HTMLDivElement>(null);
   
@@ -164,29 +192,120 @@ export function TerminalPanel() {
           </div>
           
           <div className="flex items-center gap-1">
-            {/* Theme Switcher */}
-            <div className="relative group mr-2">
-              <button className="p-2 rounded-lg hover:bg-white/5 text-text-dim transition-all" title="Terminal Theme">
+            {/* Theme Switcher — click-toggle (desktop dropdown / mobile bottom sheet) */}
+            <div className="relative mr-2" ref={themePickerRef}>
+              <button
+                onClick={() => setThemeMenuOpen(v => !v)}
+                aria-haspopup="menu"
+                aria-expanded={themeMenuOpen}
+                className={cn(
+                  "p-2 rounded-lg transition-all",
+                  themeMenuOpen
+                    ? "bg-nexus-gold/15 text-nexus-gold"
+                    : "hover:bg-white/5 text-text-dim"
+                )}
+                title="Terminal Theme"
+              >
                 <Palette size={14} />
               </button>
-              <div className="absolute right-0 bottom-full mb-1 hidden group-hover:flex flex-col bg-bg-surface border border-nexus-border rounded-xl p-1 shadow-2xl z-[2000] min-w-[140px]">
-                {(Object.entries(THEMES_CONFIG) as [keyof typeof THEMES_CONFIG, any][]).map(([key, th]) => (
-                  <button
-                    key={key}
-                    onClick={() => setTerminalTheme(key)}
-                    className={cn(
-                      "flex items-center justify-between px-3 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all",
-                      terminalTheme === key ? "bg-nexus-gold/10 text-nexus-gold" : "hover:bg-white/5 text-text-dim"
-                    )}
+
+              {/* Desktop dropdown (≥ sm). Anchored ABOVE the palette button. */}
+              <AnimatePresence>
+                {themeMenuOpen && (
+                  <motion.div
+                    key="desktop-theme-menu"
+                    initial={{ opacity: 0, y: 4, scale: 0.97 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 4, scale: 0.97 }}
+                    transition={{ duration: 0.12 }}
+                    role="menu"
+                    className="hidden sm:flex absolute right-0 bottom-full mb-1.5 flex-col bg-bg-surface/98 backdrop-blur-xl border border-nexus-border rounded-xl p-1 shadow-2xl z-[2000] min-w-[180px] max-h-[60vh] overflow-y-auto custom-scrollbar"
                   >
-                    <div className="flex items-center gap-2">
-                       <div className="w-2 h-2 rounded-full" style={{ background: th.prompt }} />
-                       <span>{th.name}</span>
-                    </div>
-                    {terminalTheme === key && <Check size={10} />}
-                  </button>
-                ))}
-              </div>
+                    {(Object.entries(THEMES_CONFIG) as [keyof typeof THEMES_CONFIG, any][]).map(([key, th]) => (
+                      <button
+                        key={key}
+                        role="menuitemradio"
+                        aria-checked={terminalTheme === key}
+                        onClick={() => { setTerminalTheme(key); setThemeMenuOpen(false); }}
+                        className={cn(
+                          "flex items-center justify-between px-3 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all text-left",
+                          terminalTheme === key ? "bg-nexus-gold/10 text-nexus-gold" : "hover:bg-white/5 text-text-dim"
+                        )}
+                      >
+                        <div className="flex items-center gap-2">
+                          <div className="w-2.5 h-2.5 rounded-full ring-1 ring-white/10" style={{ background: th.prompt }} />
+                          <span>{th.name}</span>
+                        </div>
+                        {terminalTheme === key && <Check size={11} />}
+                      </button>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* Mobile bottom sheet (< sm). Renders into the document so it
+                  isn't clipped by overflowing parents. */}
+              <AnimatePresence>
+                {themeMenuOpen && (
+                  <motion.div
+                    key="mobile-theme-sheet"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.15 }}
+                    className="sm:hidden fixed inset-0 z-[2100] bg-black/60 backdrop-blur-sm"
+                    onClick={() => setThemeMenuOpen(false)}
+                  >
+                    <motion.div
+                      initial={{ y: '100%' }}
+                      animate={{ y: 0 }}
+                      exit={{ y: '100%' }}
+                      transition={{ type: 'spring', damping: 28, stiffness: 320 }}
+                      onClick={(e) => e.stopPropagation()}
+                      className="absolute bottom-0 inset-x-0 rounded-t-2xl bg-bg-surface border-t border-nexus-border shadow-2xl pb-[env(safe-area-inset-bottom,0)]"
+                      role="dialog"
+                      aria-label="Choose terminal theme"
+                    >
+                      <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-white/5">
+                        <div className="flex items-center gap-2">
+                          <Palette size={13} className="text-nexus-gold" />
+                          <span className="text-[10px] font-black uppercase tracking-[0.2em] text-text-main">
+                            Terminal Theme
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => setThemeMenuOpen(false)}
+                          className="p-1.5 rounded-lg hover:bg-white/10 text-text-dim"
+                          aria-label="Close"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                      <div className="px-2 py-2 max-h-[55vh] overflow-y-auto custom-scrollbar">
+                        {(Object.entries(THEMES_CONFIG) as [keyof typeof THEMES_CONFIG, any][]).map(([key, th]) => (
+                          <button
+                            key={key}
+                            onClick={() => { setTerminalTheme(key); setThemeMenuOpen(false); }}
+                            className={cn(
+                              "w-full flex items-center justify-between px-3 py-3 rounded-xl text-[12px] font-bold tracking-wide transition-all text-left",
+                              terminalTheme === key ? "bg-nexus-gold/10 text-nexus-gold" : "hover:bg-white/5 text-text-main"
+                            )}
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className="w-4 h-4 rounded-md ring-1 ring-white/10" style={{ background: th.prompt }} />
+                              <div className="flex flex-col">
+                                <span className="text-[12px]">{th.name}</span>
+                                <span className="text-[9px] uppercase tracking-widest opacity-50" style={{ color: th.text }}>{th.bg}</span>
+                              </div>
+                            </div>
+                            {terminalTheme === key && <Check size={14} />}
+                          </button>
+                        ))}
+                      </div>
+                    </motion.div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
 
             <button 

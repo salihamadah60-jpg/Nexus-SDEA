@@ -52,6 +52,12 @@ const INITIAL_STATE: IDEState = {
   language: (typeof window !== 'undefined' && (localStorage.getItem('nexus.lang') as 'en' | 'ar')) || 'en',
   fileClipboard: null,
   recentEvents: [],
+  // Phase 13.9 — Budget guardrails
+  budgetUsd:    typeof window !== 'undefined' ? Number(localStorage.getItem('nexus.budgetUsd')    || '0') : 0,
+  budgetTokens: typeof window !== 'undefined' ? Number(localStorage.getItem('nexus.budgetTokens') || '0') : 0,
+  pausedSessions: (typeof window !== 'undefined'
+    ? (() => { try { return JSON.parse(localStorage.getItem('nexus.pausedSessions') || '{}'); } catch { return {}; } })()
+    : {}),
 };
 
 export function NexusProvider({ children }: { children: React.ReactNode }) {
@@ -453,6 +459,16 @@ export function NexusProvider({ children }: { children: React.ReactNode }) {
       if (!sessionId) return;
     }
 
+    // Phase 13.9 — Hard-stop if the session is paused by budget guardrail.
+    if (state.pausedSessions && state.pausedSessions[sessionId]) {
+      addNotification(
+        'warning',
+        'Session paused by budget guardrail',
+        'Resume in the chat banner above the composer to continue.'
+      );
+      return;
+    }
+
     const taskId = generateId('task');
 
     let checkpointId = '';
@@ -767,11 +783,16 @@ export function NexusProvider({ children }: { children: React.ReactNode }) {
     }
   }, [state.customKeys]);
 
+  // Phase 13.9 — persist budget guardrails
   useEffect(() => {
-    if (state.customKeys && Object.keys(state.customKeys).length > 0) {
-      localStorage.setItem('nexus_custom_keys', JSON.stringify(state.customKeys));
-    }
-  }, [state.customKeys]);
+    try { localStorage.setItem('nexus.budgetUsd',    String(state.budgetUsd || 0)); } catch {}
+  }, [state.budgetUsd]);
+  useEffect(() => {
+    try { localStorage.setItem('nexus.budgetTokens', String(state.budgetTokens || 0)); } catch {}
+  }, [state.budgetTokens]);
+  useEffect(() => {
+    try { localStorage.setItem('nexus.pausedSessions', JSON.stringify(state.pausedSessions || {})); } catch {}
+  }, [state.pausedSessions]);
 
   return (
     <NexusContext.Provider value={{

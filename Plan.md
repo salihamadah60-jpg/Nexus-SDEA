@@ -434,7 +434,69 @@ first key, leaving missing providers invisible). This banner stays.
 | 13.6 Suggestion Cards     | 13.1   | Small  | ✅ |
 | 13.7 Action Groups        | 13.1   | Medium | ✅ |
 | 13.8 Provider Status Banner | —    | Small  | ✅ |
+| 13.9 Budget Guardrails (alert + pause/resume) | — | Medium | ✅ |
+| 13.10 Theme System Overhaul (8 hand-tuned palettes) | — | Medium | ✅ |
+| 13.11 Terminal Theme Picker — click + mobile sheet | — | Small | ✅ |
+| 13.12 Truncated NEXUS sentinel sanitization | — | Small | ✅ |
+| 13.13 Live Preview proxy fix (prefix-strip + asset interceptor) | — | Medium | ✅ |
 
 Steps 13.3, 13.5, 13.6 can be parallelised once 13.1 is done.
 13.7 is a polish pass on top of 13.1.
 13.8 is independent (Settings panel only — no dependency on 13.1).
+13.9–13.13 are independent and were shipped together as the Phase 13 hardening pass.
+
+### Phase 13.9 — Budget Guardrails
+
+| File | Change |
+|------|--------|
+| `src/types.ts`                       | Add `budgetUsd`, `budgetTokens`, `pausedSessions` to `IDEState` |
+| `src/NexusContext.tsx`               | Hydrate from / persist to localStorage; hard-stop `sendMessage` on paused session |
+| `src/components/SettingsPanel.tsx`   | New "Budget Guardrails" section with USD + token inputs and paused-session list |
+| `src/components/ChatPanel.tsx`       | New `BudgetBanner` above composer with Pause / Resume; composer disabled when paused; shared `useSessionCost` hook |
+
+### Phase 13.10 — Theme System Overhaul
+
+Removed 9 legacy themes; kept Sovereign Dark as default. Added 7 new
+hand-tuned palettes (3 dark, 2 light, 2 mixed):
+
+| ID                  | Mode  | Identity |
+|---------------------|-------|----------|
+| `sovereign-dark`    | dark  | Default — gold + cyan on near-black |
+| `aurora-light`      | light | Premium daylight — teal + royal violet |
+| `tokyo-twilight`    | dark  | Cyberpunk dusk — coral + lilac + sky cyan |
+| `sahara-dune`       | light | Warm sand — terracotta + plum |
+| `northern-mist`     | mixed | Nordic frost — sage + glacier blue |
+| `synthwave-sunset`  | dark  | Retro magenta + electric mint |
+| `verdant-lab`       | dark  | Biotech lime + emerald + cyan-green |
+| `carbon-fiber`      | mixed | Industrial signal orange + electric blue |
+
+`THEMES` registry in `src/constants.ts` now exports `mode` + `swatch`
+fields used by the Settings picker for live colour previews.
+
+### Phase 13.11 — Terminal Theme Picker
+
+`TerminalPanel.tsx` palette button is now a click-toggle that:
+* persists selection to `localStorage`
+* renders a desktop dropdown anchored above the button (≥ sm)
+* renders a full-width animated bottom sheet on phones (< sm)
+* dismisses on outside-click and Escape
+
+### Phase 13.12 — Truncated Sentinel Fix
+
+`sanitizeNexusContent` in `ChatPanel.tsx` now strips three classes of tag:
+1. complete open + close pairs (with inner content)
+2. complete standalone tags
+3. **truncated tags** (e.g. `[NEXUS:SCREENSH` cut by SSE chunk or token cap)
+
+Eliminates the literal `[NEXUS:…` text that occasionally leaked into bubbles.
+
+### Phase 13.13 — Live Preview Proxy Fix
+
+`server.ts` proxy block reworked:
+* explicit `/api/preview/<sid>/...` route now **strips the prefix** before
+  forwarding to the dev server (prior code returned the SPA fallback for
+  every request → blank iframe)
+* added a Referer-based asset interceptor so `/src/...`, `/@vite/...`,
+  `/node_modules/...` etc. requested from inside a preview iframe are
+  routed to that session's dev server
+* preserves the loading screen for non-READY sessions

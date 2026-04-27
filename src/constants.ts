@@ -54,15 +54,30 @@ export const MODES = [
   { id: 'creative', name: 'Creative', desc: 'Breakthrough Ideas' },
 ];
 
-export const THEMES = [
-  { id: 'sovereign-dark', name: 'Sovereign Dark', desc: 'Default Neural Interface' },
-  { id: 'solar-light', name: 'Solar Light', desc: 'High Visibility' },
-  { id: 'cyberpunk', name: 'Cyberpunk', desc: 'Neon Architecture' },
-  { id: 'midnight-blue', name: 'Midnight Blue', desc: 'Deep Space focus' },
-  { id: 'rose-gold', name: 'Rose Gold', desc: 'Elegant contrast' },
-  { id: 'emerald-forest', name: 'Emerald Forest', desc: 'Organic growth' },
-  { id: 'amethyst', name: 'Amethyst', desc: 'Crystal clarity' },
-  { id: 'slate-grey', name: 'Slate Grey', desc: 'Industrial modularity' },
-  { id: 'coffee-cream', name: 'Coffee Cream', desc: 'Warm intellectual' },
-  { id: 'obsidian-abyss', name: 'Obsidian Abyss', desc: 'Infinite depth' },
+export type ThemeMode = 'dark' | 'light' | 'mixed';
+export interface ThemeDef {
+  id: string;
+  name: string;
+  desc: string;
+  mode: ThemeMode;
+  swatch: [string, string, string];
+}
+
+export const THEMES: ThemeDef[] = [
+  { id: 'sovereign-dark',   name: 'Sovereign Dark',   desc: 'Default neural interface · gold + cyan',
+    mode: 'dark',  swatch: ['#0a0a0c', '#d4af37', '#4ec9b0'] },
+  { id: 'aurora-light',     name: 'Aurora Light',     desc: 'Premium daylight · teal + royal violet',
+    mode: 'light', swatch: ['#fafbff', '#0e7490', '#6d28d9'] },
+  { id: 'tokyo-twilight',   name: 'Tokyo Twilight',   desc: 'Coral + lilac + sky on indigo dusk',
+    mode: 'dark',  swatch: ['#0c0a14', '#f7768e', '#7dcfff'] },
+  { id: 'sahara-dune',      name: 'Sahara Dune',      desc: 'Warm sand · terracotta · deep plum',
+    mode: 'light', swatch: ['#fef9f0', '#c0392b', '#6b2c5e'] },
+  { id: 'northern-mist',    name: 'Northern Mist',    desc: 'Nordic frost · sage + glacier blue',
+    mode: 'mixed', swatch: ['#1c2127', '#88c0d0', '#a3be8c'] },
+  { id: 'synthwave-sunset', name: 'Synthwave Sunset', desc: 'Retro magenta + electric mint',
+    mode: 'dark',  swatch: ['#14062b', '#ff2a6d', '#2de2e6'] },
+  { id: 'verdant-lab',      name: 'Verdant Lab',      desc: 'Biotech lime · emerald · cyan-green',
+    mode: 'dark',  swatch: ['#050d0a', '#c5e639', '#2dd4bf'] },
+  { id: 'carbon-fiber',     name: 'Carbon Fiber',     desc: 'Industrial signal orange + electric',
+    mode: 'mixed', swatch: ['#1a1a1d', '#ff6b35', '#00b4d8'] },
 ];

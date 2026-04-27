@@ -23,8 +23,17 @@ const INTENT_BADGES: Record<string, { label: string; color: string }> = {
 function sanitizeNexusContent(raw: string): string {
   if (!raw) return raw;
   let s = raw;
+  // 1. Strip well-formed open/close tag PAIRS (and their inner content).
   s = s.replace(/\[NEXUS:[A-Z_]+(?::[^\]]*)?\][\s\S]*?\[\/NEXUS:[A-Z_]+\]/g, '');
+  // 2. Strip well-formed standalone tags (open OR close, no pair).
   s = s.replace(/\[\/?NEXUS:[A-Z_]+(?::[^\]]*)?\]/g, '');
+  // 3. Strip TRUNCATED / partial tags. The model's output is sometimes cut
+  //    mid-sentinel by a token-limit or mid-chunk by an SSE boundary, e.g.
+  //    "[NEXUS:SCREENSH" or "[/NEXUS:FIL" — these used to leak into the
+  //    rendered bubble as literal text. Match anything that starts with
+  //    `[NEXUS:` (or `[/NEXUS:`) and continues until the next `]` OR end
+  //    of line OR end of string, then drop it.
+  s = s.replace(/\[\/?NEXUS:[A-Z_]*[^\]\n]*(?:\]|$)/g, '');
   s = s.replace(/\n{3,}/g, '\n\n').trim();
   return s;
 }
@@ -880,9 +889,13 @@ const STEP_STATUS_COLORS: Record<string, string> = {
   failed: 'text-red-400', todo: 'text-text-dim/30',
 };
 
-function CostBadge({ sessionId }: { sessionId: string }) {
-  const [data, setData] = useState<{ calls: number; tokensIn: number; tokensOut: number; usd: number } | null>(null);
+type CostData = { calls: number; tokensIn: number; tokensOut: number; usd: number };
+
+// Live polled cost ledger for a session. Shared by CostBadge + BudgetBanner.
+function useSessionCost(sessionId: string | null): CostData | null {
+  const [data, setData] = useState<CostData | null>(null);
   useEffect(() => {
+    if (!sessionId) { setData(null); return; }
     let cancel = false;
     const poll = async () => {
       try {
@@ -895,6 +908,11 @@ function CostBadge({ sessionId }: { sessionId: string }) {
     poll(); const t = setInterval(poll, 8000);
     return () => { cancel = true; clearInterval(t); };
   }, [sessionId]);
+  return data;
+}
+
+function CostBadge({ sessionId }: { sessionId: string }) {
+  const data = useSessionCost(sessionId);
   if (!data || data.calls === 0) return null;
   const tk = data.tokensIn + data.tokensOut;
   const usd = data.usd || 0;
@@ -912,6 +930,70 @@ function CostBadge({ sessionId }: { sessionId: string }) {
       <span className="text-[9px]"><b className="text-nexus-cyan">{data.calls}</b> calls</span>
       <span className="text-[9px]"><b className="text-nexus-cyan">{(tk / 1000).toFixed(1)}k</b> tok</span>
       <span className="text-[9px]"><b className="text-nexus-cyan">${usd.toFixed(4)}</b></span>
+    </div>
+  );
+}
+
+// Phase 13.9 — Budget guardrail banner. Renders between the message list
+// and the composer when EITHER the per-session token spend OR the per-
+// session USD spend has crossed its configured threshold (Settings →
+// Budget Guardrails). When paused, Send is hard-blocked in the context.
+function BudgetBanner({ sessionId }: { sessionId: string }) {
+  const { state, setState } = useNexus();
+  const cost = useSessionCost(sessionId);
+  const tokenLimit = state.budgetTokens || 0;
+  const usdLimit   = state.budgetUsd    || 0;
+  const tokens     = cost ? cost.tokensIn + cost.tokensOut : 0;
+  const usd        = cost ? cost.usd : 0;
+  const overTokens = tokenLimit > 0 && tokens >= tokenLimit;
+  const overUsd    = usdLimit   > 0 && usd    >= usdLimit;
+  const paused     = !!state.pausedSessions[sessionId];
+  if (!paused && !overTokens && !overUsd) return null;
+
+  const setPaused = (next: boolean) => {
+    setState(prev => {
+      const map = { ...prev.pausedSessions };
+      if (next) map[sessionId] = true; else delete map[sessionId];
+      return { ...prev, pausedSessions: map };
+    });
+  };
+
+  const reasons: string[] = [];
+  if (overUsd)    reasons.push(`$${usd.toFixed(4)} ≥ $${usdLimit.toFixed(2)}`);
+  if (overTokens) reasons.push(`${tokens.toLocaleString()} ≥ ${tokenLimit.toLocaleString()} tok`);
+
+  return (
+    <div className={cn(
+      'mx-4 my-2 rounded-xl border px-3.5 py-2.5 flex items-center gap-3 backdrop-blur-md shrink-0',
+      paused
+        ? 'bg-red-500/10 border-red-500/30 text-red-300'
+        : 'bg-amber-500/10 border-amber-500/30 text-amber-200'
+    )}>
+      <AlertCircle size={14} className={paused ? 'text-red-400 shrink-0' : 'text-amber-400 shrink-0'} />
+      <div className="flex-1 min-w-0">
+        <p className="text-[10px] font-black uppercase tracking-[0.2em]">
+          {paused ? 'Session Paused · Budget Guardrail' : 'Budget Threshold Reached'}
+        </p>
+        <p className="text-[10px] mt-0.5 opacity-80 font-mono truncate">
+          {reasons.join(' · ') || 'Manually paused'}
+          {!reasons.length && paused && ` · ${tokens.toLocaleString()} tok · $${usd.toFixed(4)}`}
+        </p>
+      </div>
+      {paused ? (
+        <button
+          onClick={() => setPaused(false)}
+          className="text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25 transition-colors shrink-0"
+        >
+          Resume
+        </button>
+      ) : (
+        <button
+          onClick={() => setPaused(true)}
+          className="text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 rounded-md bg-red-500/15 border border-red-500/30 text-red-300 hover:bg-red-500/25 transition-colors shrink-0"
+        >
+          Pause Session
+        </button>
+      )}
     </div>
   );
 }
@@ -1241,28 +1323,43 @@ export function ChatPanel() {
         ))}
       </div>
 
+      {/* Phase 13.9 — Budget guardrail banner (renders only when over threshold or paused) */}
+      {state.currentSessionId && <BudgetBanner sessionId={state.currentSessionId} />}
+
       {/* Input */}
       <div className="p-4 bg-bg-surface/50 backdrop-blur-xl border-t border-border shrink-0">
         <div className="max-w-4xl mx-auto relative">
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); handleSend(); }
-            }}
-            placeholder={state.isAILoading ? 'Nexus is working...' : 'Instruct Nexus AI...'}
-            rows={1}
-            disabled={state.isAILoading}
-            className="w-full bg-nexus-black/50 border-none rounded-2xl px-4 py-3 pr-14 text-[13px] text-white focus:outline-none focus:ring-1 focus:ring-nexus-gold/20 transition-all custom-scrollbar resize-none shadow-inner min-h-[44px] disabled:opacity-50"
-          />
-          <button
-            onClick={handleSend}
-            disabled={!input.trim() || state.isAILoading}
-            className="absolute right-3 bottom-1.5 h-9 w-9 flex items-center justify-center rounded-xl bg-nexus-gold text-bg-deep shadow-[0_0_20px_rgba(212,175,55,0.3)] hover:scale-105 active:scale-95 disabled:opacity-20 disabled:scale-100 transition-all"
-          >
-            {state.isAILoading ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
-          </button>
+          {(() => {
+            const sessionPaused = !!(state.currentSessionId && state.pausedSessions[state.currentSessionId]);
+            return (
+              <>
+                <textarea
+                  ref={textareaRef}
+                  value={input}
+                  onChange={e => setInput(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); handleSend(); }
+                  }}
+                  placeholder={
+                    sessionPaused      ? 'Session paused — resume above to continue…' :
+                    state.isAILoading  ? 'Nexus is working...'                         :
+                                         'Instruct Nexus AI...'
+                  }
+                  rows={1}
+                  disabled={state.isAILoading || sessionPaused}
+                  className="w-full bg-nexus-black/50 border-none rounded-2xl px-4 py-3 pr-14 text-[13px] text-white focus:outline-none focus:ring-1 focus:ring-nexus-gold/20 transition-all custom-scrollbar resize-none shadow-inner min-h-[44px] disabled:opacity-50"
+                />
+                <button
+                  onClick={handleSend}
+                  disabled={!input.trim() || state.isAILoading || sessionPaused}
+                  className="absolute right-3 bottom-1.5 h-9 w-9 flex items-center justify-center rounded-xl bg-nexus-gold text-bg-deep shadow-[0_0_20px_rgba(212,175,55,0.3)] hover:scale-105 active:scale-95 disabled:opacity-20 disabled:scale-100 transition-all"
+                  title={sessionPaused ? 'Session paused by budget guardrail' : 'Send (Cmd/Ctrl+Enter)'}
+                >
+                  {state.isAILoading ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
+                </button>
+              </>
+            );
+          })()}
         </div>
         <p className="text-center text-[8px] text-text-dim/20 mt-2 font-medium uppercase tracking-[0.1em]">
           Cmd/Ctrl+Enter to Send • Retry clears history from that point • Phase 13 Active

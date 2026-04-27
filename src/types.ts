@@ -123,6 +123,10 @@ export interface IDEState {
   language: 'en' | 'ar';
   fileClipboard: { srcPath: string; mode: 'copy' | 'cut' } | null;
   recentEvents: NexusEvent[];
+  // Phase 13.9 — Budget guardrails
+  budgetUsd: number;        // 0 = disabled
+  budgetTokens: number;     // 0 = disabled
+  pausedSessions: Record<string, boolean>;
 }
 
 export interface NexusEvent {

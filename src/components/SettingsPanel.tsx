@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Shield, Database, Cpu, GitBranch, Zap, Activity, RefreshCw, CheckCircle2, XCircle, Palette, KeyRound, Timer, Rocket, BarChart2, Languages, Sparkles, Plus, Eye, EyeOff, Loader2, ExternalLink } from 'lucide-react';
+import { Shield, Database, Cpu, GitBranch, Zap, Activity, RefreshCw, CheckCircle2, XCircle, Palette, KeyRound, Timer, Rocket, BarChart2, Languages, Sparkles, Plus, Eye, EyeOff, Loader2, ExternalLink, DollarSign, AlertTriangle } from 'lucide-react';
 import { useNexus } from '../NexusContext';
 import { cn } from '../utils';
 import { MODELS, MODES, THEMES } from '../constants';
@@ -681,32 +681,129 @@ export function SettingsPanel() {
         )}
       </section>
 
-      {/* Theme Selection */}
+      {/* Theme Selection — 8 hand-tuned palettes */}
       <section>
         <div className="flex items-center gap-2 mb-3">
           <Palette size={14} className="text-nexus-gold" />
           <h3 className="nexus-label mb-0">Interface Theme</h3>
         </div>
         <div className="grid grid-cols-2 gap-2">
-          {THEMES.map(t => (
-            <button
-              key={t.id}
-              onClick={() => setState(prev => ({ ...prev, theme: t.id }))}
-              className={cn(
-                'group flex flex-col items-start p-2.5 rounded-xl border transition-all text-left',
-                state.theme === t.id
-                  ? 'bg-nexus-gold/10 border-nexus-gold/30 ring-1 ring-nexus-gold/20'
-                  : 'bg-white/[0.02] border-white/5 hover:bg-white/[0.05] hover:border-white/10'
-              )}
-            >
-              <span className={cn(
-                'text-[11px] font-bold mb-0.5',
-                state.theme === t.id ? 'text-nexus-gold' : 'text-text-main'
-              )}>{t.name}</span>
-              <span className="text-[8px] text-text-dim/60 leading-tight uppercase tracking-tighter line-clamp-2">{t.desc}</span>
-            </button>
-          ))}
+          {THEMES.map(t => {
+            const active = state.theme === t.id;
+            const modeChip =
+              t.mode === 'dark'  ? 'bg-white/5 text-text-dim' :
+              t.mode === 'light' ? 'bg-amber-300/10 text-amber-300' :
+                                   'bg-nexus-cyan/10 text-nexus-cyan';
+            return (
+              <button
+                key={t.id}
+                onClick={() => setState(prev => ({ ...prev, theme: t.id }))}
+                className={cn(
+                  'group relative flex flex-col items-start p-2.5 rounded-xl border transition-all text-left overflow-hidden',
+                  active
+                    ? 'bg-nexus-gold/10 border-nexus-gold/30 ring-1 ring-nexus-gold/20'
+                    : 'bg-white/[0.02] border-white/5 hover:bg-white/[0.05] hover:border-white/10'
+                )}
+              >
+                <div className="flex items-center justify-between w-full mb-1.5">
+                  <span className={cn(
+                    'text-[11px] font-bold',
+                    active ? 'text-nexus-gold' : 'text-text-main'
+                  )}>{t.name}</span>
+                  <span className={cn('text-[7px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded', modeChip)}>
+                    {t.mode}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1 mb-1">
+                  {t.swatch.map((c, i) => (
+                    <div
+                      key={i}
+                      className="w-4 h-4 rounded-md ring-1 ring-white/10"
+                      style={{ background: c }}
+                    />
+                  ))}
+                </div>
+                <span className="text-[8px] text-text-dim/60 leading-tight uppercase tracking-tighter line-clamp-2">{t.desc}</span>
+              </button>
+            );
+          })}
         </div>
+      </section>
+
+      {/* Phase 13.9 — Budget Guardrails */}
+      <section>
+        <div className="flex items-center gap-2 mb-1">
+          <AlertTriangle size={14} className="text-amber-400" />
+          <h3 className="nexus-label mb-0">Budget Guardrails</h3>
+        </div>
+        <p className="text-[9px] text-text-dim/60 mb-3 leading-snug">
+          When a session crosses either threshold, a warning banner appears
+          above the composer with a one-click pause. Set to 0 to disable.
+        </p>
+        <div className="grid grid-cols-2 gap-2">
+          <label className="flex flex-col gap-1 rounded-xl border border-white/5 bg-white/[0.02] px-3 py-2.5">
+            <span className="text-[8px] font-black uppercase tracking-[0.18em] text-text-dim flex items-center gap-1.5">
+              <DollarSign size={9} className="text-amber-400" /> USD threshold
+            </span>
+            <div className="flex items-center gap-1">
+              <span className="text-[10px] text-text-dim font-mono">$</span>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={state.budgetUsd || 0}
+                onChange={e => setState(prev => ({ ...prev, budgetUsd: Math.max(0, Number(e.target.value) || 0) }))}
+                className="flex-1 min-w-0 bg-transparent text-[12px] font-bold text-text-main focus:outline-none"
+                placeholder="0.00"
+              />
+            </div>
+          </label>
+          <label className="flex flex-col gap-1 rounded-xl border border-white/5 bg-white/[0.02] px-3 py-2.5">
+            <span className="text-[8px] font-black uppercase tracking-[0.18em] text-text-dim flex items-center gap-1.5">
+              <Zap size={9} className="text-nexus-cyan" /> Token threshold
+            </span>
+            <input
+              type="number"
+              step="1000"
+              min="0"
+              value={state.budgetTokens || 0}
+              onChange={e => setState(prev => ({ ...prev, budgetTokens: Math.max(0, Math.floor(Number(e.target.value) || 0)) }))}
+              className="bg-transparent text-[12px] font-bold text-text-main focus:outline-none"
+              placeholder="100000"
+            />
+          </label>
+        </div>
+        {(state.budgetUsd > 0 || state.budgetTokens > 0) && (
+          <p className="text-[9px] text-text-dim/50 mt-2 font-mono">
+            Active limits:{' '}
+            {state.budgetUsd > 0    && <span className="text-amber-400">${state.budgetUsd.toFixed(2)}</span>}
+            {state.budgetUsd > 0 && state.budgetTokens > 0 && <span className="text-text-dim/40"> · </span>}
+            {state.budgetTokens > 0 && <span className="text-nexus-cyan">{state.budgetTokens.toLocaleString()} tok</span>}
+          </p>
+        )}
+        {Object.keys(state.pausedSessions || {}).length > 0 && (
+          <div className="mt-2 p-2 rounded-lg bg-red-500/5 border border-red-500/20">
+            <p className="text-[9px] font-bold uppercase tracking-widest text-red-300/80 mb-1.5">
+              Paused sessions ({Object.keys(state.pausedSessions).length})
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {Object.keys(state.pausedSessions).map(sid => (
+                <button
+                  key={sid}
+                  onClick={() => setState(prev => {
+                    const map = { ...prev.pausedSessions };
+                    delete map[sid];
+                    return { ...prev, pausedSessions: map };
+                  })}
+                  className="text-[8px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/20 transition-colors"
+                  title="Click to resume"
+                >
+                  {sid.slice(0, 14)}…  ▶ resume
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </section>
 
       {/* Model Selection */}
