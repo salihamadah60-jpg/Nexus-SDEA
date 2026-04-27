@@ -2,7 +2,7 @@ import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react'
 import {
   ShieldCheck, Zap, Bot, CheckCircle2, XCircle, Clock,
   ChevronDown, ChevronRight, Trash2, RefreshCw, AlertTriangle, RotateCcw,
-  Check,
+  Check, Layers,
 } from 'lucide-react';
 import { useNexus } from '../NexusContext';
 import { cn } from '../utils';
@@ -321,6 +321,9 @@ function StatsBar({ events }: { events: HealEvent[] }) {
   );
 }
 
+// ── Batch "Heal All Failed" ─────────────────────────────────────────────────
+type BatchState = 'idle' | 'running' | 'done';
+
 // ── Main panel ─────────────────────────────────────────────────────────────
 export function SelfHealingPanel() {
   const { state } = useNexus();
@@ -331,9 +334,48 @@ export function SelfHealingPanel() {
   const [autoScroll, setAutoScroll] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // Batch heal state
+  const [batchState, setBatchState]     = useState<BatchState>('idle');
+  const [batchProgress, setBatchProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
+
   const handleRetryResult = useCallback((id: string, rs: RetryState, detail?: string) => {
     setRetryMap(prev => ({ ...prev, [id]: { state: rs, detail } }));
   }, []);
+
+  // ── Batch heal all failed AI events ──────────────────────────────────────
+  const healAllFailed = useCallback(async (retryableEvents: HealEvent[]) => {
+    if (!sessionId || batchState === 'running' || retryableEvents.length === 0) return;
+    setBatchState('running');
+    setBatchProgress({ done: 0, total: retryableEvents.length });
+
+    let done = 0;
+    for (const ev of retryableEvents) {
+      handleRetryResult(ev.id, 'running');
+      try {
+        const res = await fetch('/api/kernel/heal/retry', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId,
+            filePath: ev.file,
+            errorHint: ev.errorHint || ev.detail,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          handleRetryResult(ev.id, 'failed', data.detail || data.error);
+        } else {
+          handleRetryResult(ev.id, 'success', data.detail);
+        }
+      } catch (err: any) {
+        handleRetryResult(ev.id, 'failed', err.message);
+      }
+      done += 1;
+      setBatchProgress({ done, total: retryableEvents.length });
+    }
+    setBatchState('done');
+    setTimeout(() => setBatchState('idle'), 3000);
+  }, [sessionId, batchState, handleRetryResult]);
 
   // Parse terminal journal lines for the current session
   const terminalEvents = useMemo(() => {
@@ -372,6 +414,22 @@ export function SelfHealingPanel() {
 
   const retryCount = Object.values(retryMap).filter(r => r.state === 'success').length;
 
+  // Events eligible for batch heal: AI-failed, have a file, not already successfully retried
+  const retryableEvents = useMemo(() =>
+    allEvents.filter(ev =>
+      ev.pass === 'ai' &&
+      ev.status === 'failed' &&
+      !!ev.file &&
+      !!sessionId &&
+      retryMap[ev.id]?.state !== 'success'
+    ), [allEvents, retryMap, sessionId]);
+
+  const batchLabel = batchState === 'running'
+    ? `Healing ${batchProgress.done}/${batchProgress.total}…`
+    : batchState === 'done'
+      ? 'All Done!'
+      : `Heal All (${retryableEvents.length})`;
+
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
@@ -381,9 +439,34 @@ export function SelfHealingPanel() {
           <h3 className="nexus-label mb-0">Self-Healing</h3>
         </div>
         <div className="flex items-center gap-1.5">
+          {/* Batch heal button — only shown when there are retryable failures */}
+          {retryableEvents.length > 0 && (
+            <button
+              onClick={() => healAllFailed(retryableEvents)}
+              disabled={batchState === 'running'}
+              title="Re-run AI healer on every failed event in sequence"
+              className={cn(
+                'flex items-center gap-1 px-2 py-0.5 rounded border text-[8px] font-bold uppercase tracking-widest transition-all',
+                batchState === 'done'
+                  ? 'bg-nexus-green/15 border-nexus-green/40 text-nexus-green cursor-default'
+                  : batchState === 'running'
+                    ? 'bg-nexus-gold/10 border-nexus-gold/30 text-nexus-gold cursor-wait opacity-80'
+                    : 'bg-red-400/10 border-red-400/30 text-red-400 hover:bg-red-400/20 hover:border-red-400/50'
+              )}
+            >
+              {batchState === 'running'
+                ? <RefreshCw size={9} className="animate-spin" />
+                : batchState === 'done'
+                  ? <Check size={9} />
+                  : <Layers size={9} />
+              }
+              {batchLabel}
+            </button>
+          )}
+
           {retryCount > 0 && (
             <span className="text-[8px] font-bold tracking-widest px-1.5 py-0.5 rounded border bg-nexus-gold/10 border-nexus-gold/30 text-nexus-gold">
-              {retryCount} manually healed
+              {retryCount} healed
             </span>
           )}
           {allEvents.length > 0 && (
@@ -393,7 +476,7 @@ export function SelfHealingPanel() {
               : successRate >= 50 ? 'text-nexus-gold  border-nexus-gold/30  bg-nexus-gold/10'
               : 'text-red-400 border-red-400/30 bg-red-400/10'
             )}>
-              {successRate}% healed
+              {successRate}%
             </span>
           )}
           <button

@@ -225,3 +225,149 @@ A line flips to ✅ only when **all three** are true:
 | Checkpoint 400 (not 500) | `src/routes/sovereign.ts` | Returns 400 when sandbox not yet initialised |
 | Path-traversal guard | `server.ts` | Blocks raw `../` and encoded `%2e%2e` on `/sandbox-preview` |
 | Security: GEMINI_API_KEY not embedded in bundle | `vite.config.ts` | Removed key from `define` block |
+| Batch Heal All Failed | `SelfHealingPanel.tsx` | "Heal All (N)" header button retries every failed AI event sequentially, live progress counter, auto-clears after 3 s |
+| Retry Fix per-row | `SelfHealingPanel.tsx`, `sovereign.ts` | POST /api/kernel/heal/retry — per-row AI re-heal with spinner/success/fail states |
+
+---
+
+## PHASE 13 — Agent-Style UX (Nexus as a Transparent AI Engineer)
+
+> Vision: make Nexus behave exactly like a senior AI engineer working live in
+> the chat — step-by-step narration, transparent thinking, collapsible tool
+> panels, file previews, diff views, screenshots — all surfaced inline in the
+> chat stream without cluttering the conversation.
+
+### 13.1 — Structured Tool-Action Cards in Chat ⬜
+
+Every tool call the agent makes renders as a compact, collapsible **Action
+Card** inside the chat bubble, not as raw text.
+
+**Cards to implement**
+
+| Card type     | Trigger                   | Content                                  |
+|---------------|---------------------------|------------------------------------------|
+| `RunShell`    | shell command executed     | command + exit code + stdout preview     |
+| `ReadFile`    | file opened for reading    | filename chip + "Open file ↗" link       |
+| `WriteFile`   | file written / edited      | filename chip + "View diff ↗" button     |
+| `ThinkingBlock` | planning/reasoning step  | collapsible italic thought text          |
+| `Screenshot`  | screenshot taken           | inline thumbnail, click to enlarge       |
+| `Restart`     | workflow restarted         | status pill (restarting → running)       |
+| `CheckLogs`   | logs fetched               | summary line + collapsible raw output    |
+
+**Implementation notes**
+- Add `toolCalls: ToolCall[]` to each assistant `ChatMessage` in NexusContext.
+- SSE stream emits `event: tool_call` frames with `{ type, label, detail, status }`.
+- `ChatMessage.tsx` renders tool call frames as `<ActionCard>` components above
+  the text body of the message.
+- Each `<ActionCard>` is collapsed by default; click to expand.
+- Cards with a file reference include an "Open file" button that sets `state.activeFile`.
+
+---
+
+### 13.2 — Thinking / Reasoning Disclosure ⬜
+
+Before the first word of the answer, the agent narrates its reasoning in a
+collapsible block that doesn't interrupt the main message.
+
+**Implementation notes**
+- Backend: when the orchestrator forms a plan, emit `event: thinking` SSE frame
+  before any `chunk`.
+- Frontend: `ChatMessage.tsx` renders `<ThinkingBlock>` — collapsed by default,
+  labelled "Thought for N seconds".
+- Elapsed time shown = time between user send and first `chunk`.
+
+---
+
+### 13.3 — Inline File Viewer & Diff ⬜
+
+Any file path mentioned in chat (or in an Action Card) is clickable, opening a
+lightweight preview without leaving the chat.
+
+**Implementation notes**
+- Parse message text for `src/...` / `./...` patterns → `<FileChip>` components.
+- Click sets `state.activeFile` and focuses the file explorer tab.
+- `WriteFile` action card adds a **"View diff"** button using the checkpoint
+  snapshot for before/after comparison in a modal overlay.
+
+---
+
+### 13.4 — Six-Phase Step Narration ⬜
+
+The agent narrates each phase with consistent, labelled prose:
+
+1. **Reading** — "Let me look at the route structure…"
+2. **Planning** — "I have everything I need. Here is the plan:" (numbered list)
+3. **Executing** — "Let me now apply the changes in parallel:" / "simultaneously:"
+4. **Verifying** — "Let me restart to confirm it compiles cleanly."
+5. **Confirmed** — "Clean boot — no errors."
+6. **Summarising** — concise bullet summary of what was done.
+
+**Implementation notes**
+- Extend `statusHistory` SSE frames to carry a `phase` tag:
+  `reading | planning | executing | verifying | confirmed | summarising`.
+- `ChatMessage.tsx` renders phase tags as small section dividers inside the
+  message — no change to user-visible text, purely structural styling.
+
+---
+
+### 13.5 — Inline Screenshot Display ⬜
+
+After any verification screenshot, the image appears inline in the chat bubble.
+
+**Implementation notes**
+- Backend: after screenshot(), emit `event: screenshot` SSE frame with `{ url }`.
+- Frontend: `ChatMessage.tsx` listens for screenshot frames → renders `<img>`
+  with a lightbox on click.
+- Appears inside a "Took a screenshot" `<ActionCard>` (consistent with 13.1).
+
+---
+
+### 13.6 — Suggestion Cards ⬜
+
+At the end of each completed task, a single dismissible card with a one-click
+accept button replaces the current bold suggestion text.
+
+**Implementation notes**
+- Add `suggestion?: string` to the last assistant `ChatMessage` per turn.
+- `<SuggestionCard>` renders below the message body with:
+  - Lightning bolt icon + suggestion text
+  - **"Yes, do it"** button → sends suggestion as next user message
+  - **"✕"** dismiss button → removes card locally
+
+---
+
+### 13.7 — Collapsible Action Groups ("N actions") ⬜
+
+When several tool calls happen in rapid sequence they collapse into a summary:
+`📄 3 actions`. Click to expand all.
+
+**Implementation notes**
+- Group consecutive `<ActionCard>`s of the same phase into `<ActionGroup>`.
+- Show a summary chip when collapsed, vertical list when expanded.
+- Auto-collapse groups with `success` status; leave `failed` groups expanded.
+
+---
+
+### Phase 13 Key Files
+
+| File                                  | Change                                                           |
+|---------------------------------------|------------------------------------------------------------------|
+| `src/components/ChatMessage.tsx`      | ActionCard, ThinkingBlock, FileChip, SuggestionCard, ActionGroup |
+| `src/NexusContext.tsx`                | Add `toolCalls`, `thinking`, `suggestion` to ChatMessage type    |
+| `src/services/orchestratorService.ts` | Emit `tool_call`, `thinking`, `screenshot`, `suggestion` frames  |
+| `src/routes/sovereign.ts`             | Pass new SSE frames through to the client                        |
+
+### Phase 13 Execution Order
+
+| Step | Depends on | Effort  |
+|------|------------|---------|
+| 13.1 Action Cards      | —      | Large  |
+| 13.2 Thinking Block    | 13.1   | Medium |
+| 13.3 File Viewer/Diff  | 13.1   | Small  |
+| 13.4 Phase Narration   | 13.1–2 | Medium |
+| 13.5 Screenshots       | 13.1   | Small  |
+| 13.6 Suggestion Cards  | 13.1   | Small  |
+| 13.7 Action Groups     | 13.1   | Medium |
+
+Steps 13.3, 13.5, 13.6 can be parallelised once 13.1 is done.
+13.7 is a polish pass on top of 13.1.
