@@ -1,5 +1,14 @@
 # Nexus AI Sovereign IDE v8.0 — Silent Operator
 
+## Phase 13.4 — Visual Self-Improvement Loop (2026-04-27)
+
+| # | Feature | Files | Summary |
+|---|---------|-------|---------|
+| 1 | **`requestVisualRevision` writer call** | `src/services/visualAuditorService.ts` | Converts a `VisualVerdict` (score + categorized issues + recommendations) into a structured issue list and pipes the failing UI files through `requestAuditFix` (cascade: GitHub gpt-4o → Gemini → Groq). The instruction set re-asserts the Quality Bar (≥6 sections, real `@theme` palette, framer-motion, lucide icons, ≥6 depth signals, ≥10 responsive classes, semantic HTML, ≥40-line components) so the writer doesn't regress to placeholder copy. |
+| 2 | **`readSandboxUiFiles` collector** | `src/services/visualAuditorService.ts` | Reads up to 8 UI candidates per session: `src/App.{tsx,jsx}`, `src/index.css`, and `src/components/*.{tsx,jsx}`. Skips files >12 KB to keep prompt size manageable. Returns the `{ path, content }[]` shape the writer expects. |
+| 3 | **Self-Improvement Loop in autopilot** | `src/services/autopilotService.ts` (`performVisualAudit`) | Replaced the one-shot vision audit with a closed feedback loop. After each screenshot, the auditor scores the design; if `score < 75` and `visualRevisionAttempts < 2`, the autopilot reads the sandbox UI files, asks the writer to revise them with the verdict as the brief, writes the revised files back (Vite HMR picks them up), waits 5 s for recompile, captures a fresh screenshot named `audit-revision-N.png`, and re-audits. Capped at 2 revision passes per boot to prevent ping-ponging. The journal logs each pass with colour-coded scores (green ≥80, cyan ≥75, amber ≥50, red <50) and broadcasts `__VISUAL_VERDICT__:<json>` events with the pass index for the Self-Healing panel. |
+| 4 | **Loop tracking on SessionProcess** | `src/services/autopilotService.ts` | Added `visualRevisionAttempts` and `bestVisualScore` to the per-session state plus the constants `VISUAL_REVISION_THRESHOLD = 75` and `MAX_VISUAL_REVISIONS = 2`. Both initializers updated to default the counters to 0. The cap survives across the audit attempts within a single boot. |
+
 ## Phase 13.3 — Visual Auditor (vision-model design grader) (2026-04-27)
 
 | # | Feature | Files | Summary |

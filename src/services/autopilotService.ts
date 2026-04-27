@@ -45,11 +45,19 @@ interface SessionProcess {
   // immediately instead of burning the full MAX_ATTEMPTS on the same bug.
   recentStderr: string;
   lastFailureSig: string | null;
+  // Phase 13.4 — Visual self-improvement loop. Counts how many times the
+  // Visual Auditor scored < threshold and we re-asked the writer to revise
+  // the UI. Capped at MAX_VISUAL_REVISIONS to prevent ping-ponging.
+  visualRevisionAttempts: number;
+  bestVisualScore: number;
 }
 
 const activeProcesses = new Map<string, SessionProcess>();
 const START_PORT = 3001;
 const MAX_ATTEMPTS = 3;
+// Phase 13.4 — Visual Self-Improvement Loop tuning
+const VISUAL_REVISION_THRESHOLD = 75;   // verdict score below this triggers a revision
+const MAX_VISUAL_REVISIONS = 2;          // hard cap on auto-revision passes per boot
 
 /** Phase 12.5 — Get session IDs that actually exist in SQLite. */
 function getLiveSessions(): Set<string> {
@@ -330,7 +338,7 @@ async function triggerInstallAndRun(
   if (!sessionState) {
     const preferred = await getPreferredPort(projectDir);
     const { port } = await acquirePort({ preferred, killOccupant: true });
-    sessionState = { devProcess: null, status: "IDLE", port, projectDir, installAttempts: 0, startAttempts: 0, recentStderr: "", lastFailureSig: null };
+    sessionState = { devProcess: null, status: "IDLE", port, projectDir, installAttempts: 0, startAttempts: 0, recentStderr: "", lastFailureSig: null, visualRevisionAttempts: 0, bestVisualScore: 0 };
     activeProcesses.set(sessionId, sessionState);
   }
 
@@ -462,7 +470,7 @@ async function startDevServer(
   if (!sessionState) {
     const preferred = await getPreferredPort(projectDir);
     const { port } = await acquirePort({ preferred, killOccupant: true });
-    sessionState = { devProcess: null, status: "IDLE", port, projectDir, installAttempts: 0, startAttempts: 0, recentStderr: "", lastFailureSig: null };
+    sessionState = { devProcess: null, status: "IDLE", port, projectDir, installAttempts: 0, startAttempts: 0, recentStderr: "", lastFailureSig: null, visualRevisionAttempts: 0, bestVisualScore: 0 };
     activeProcesses.set(sessionId, sessionState);
   }
 
@@ -733,22 +741,100 @@ async function performVisualAudit(
       broadcast(`\x1b[32m[VISUAL AUDIT] Success: Screenshot captured.\x1b[0m\r\n`, sessionId, undefined, "journal");
       broadcast(`__VISUAL_SNAPSHOT__:${result.filename}`, sessionId, undefined, "journal");
 
-      // Phase 13.3 — Visual Auditor (vision model grades the rendered design).
-      // Fire-and-forget: never block READY on the LLM call.
+      // Phase 13.3 + 13.4 — Visual Auditor + Self-Improvement Loop.
+      // Fire-and-forget IIFE: vision-model grades the rendered design,
+      // and if the score falls below VISUAL_REVISION_THRESHOLD we ask
+      // the writer to revise the UI files based on the verdict, write
+      // them back, wait for HMR, re-screenshot, and re-audit. Capped
+      // at MAX_VISUAL_REVISIONS to prevent ping-ponging.
       (async () => {
+        const colour = (s: number) =>
+          s >= 80 ? "\x1b[32m" : s >= 75 ? "\x1b[36m" : s >= 50 ? "\x1b[33m" : "\x1b[31m";
         try {
-          const screenshotPath = path.join(projectDir, ".nexus", "snapshots", result.filename);
-          const { auditScreenshot, formatVerdictForJournal } = await import("./visualAuditorService.js");
-          broadcast(`\x1b[36m[VISUAL AUDITOR] Sending screenshot to vision model...\x1b[0m\r\n`, sessionId, undefined, "journal");
-          const verdict = await auditScreenshot(screenshotPath, "(rendered preview review)", undefined, sessionId);
-          if (verdict) {
-            const colour = verdict.score >= 80 ? "\x1b[32m" : verdict.score >= 70 ? "\x1b[36m" : verdict.score >= 50 ? "\x1b[33m" : "\x1b[31m";
-            broadcast(`${colour}${formatVerdictForJournal(verdict)}\x1b[0m\r\n`, sessionId, undefined, "journal");
-            // Structured event for the UI panel to render the full verdict card.
-            broadcast(`__VISUAL_VERDICT__:${JSON.stringify(verdict)}`, sessionId, undefined, "journal");
-          } else {
-            broadcast(`\x1b[33m[VISUAL AUDITOR] Skipped (no Gemini key available or screenshot unreadable).\x1b[0m\r\n`, sessionId, undefined, "journal");
+          const {
+            auditScreenshot,
+            formatVerdictForJournal,
+            requestVisualRevision,
+            readSandboxUiFiles,
+          } = await import("./visualAuditorService.js");
+
+          let currentSnapshot = result.filename;
+
+          for (let pass = 0; pass <= MAX_VISUAL_REVISIONS; pass++) {
+            const screenshotPath = path.join(projectDir, ".nexus", "snapshots", currentSnapshot);
+            const stage = pass === 0 ? "initial" : `revision ${pass}`;
+            broadcast(`\x1b[36m[VISUAL AUDITOR] (${stage}) Sending screenshot to vision model...\x1b[0m\r\n`, sessionId, undefined, "journal");
+
+            const verdict = await auditScreenshot(screenshotPath, `(rendered preview — ${stage})`, undefined, sessionId);
+            if (!verdict) {
+              broadcast(`\x1b[33m[VISUAL AUDITOR] Skipped (no Gemini key available or screenshot unreadable).\x1b[0m\r\n`, sessionId, undefined, "journal");
+              return;
+            }
+
+            const s = activeProcesses.get(sessionId);
+            if (s && verdict.score > s.bestVisualScore) s.bestVisualScore = verdict.score;
+
+            broadcast(`${colour(verdict.score)}${formatVerdictForJournal(verdict)}\x1b[0m\r\n`, sessionId, undefined, "journal");
+            broadcast(`__VISUAL_VERDICT__:${JSON.stringify({ ...verdict, pass })}`, sessionId, undefined, "journal");
+
+            if (verdict.score >= VISUAL_REVISION_THRESHOLD) {
+              broadcast(`\x1b[32m[SELF-IMPROVE] Score ${verdict.score} ≥ ${VISUAL_REVISION_THRESHOLD} — design accepted.\x1b[0m\r\n`, sessionId, undefined, "journal");
+              return;
+            }
+
+            if (!s || s.visualRevisionAttempts >= MAX_VISUAL_REVISIONS) {
+              broadcast(`\x1b[33m[SELF-IMPROVE] Revision cap reached (${MAX_VISUAL_REVISIONS}). Best score this boot: ${s?.bestVisualScore ?? verdict.score}/100.\x1b[0m\r\n`, sessionId, undefined, "journal");
+              return;
+            }
+            s.visualRevisionAttempts++;
+
+            broadcast(`\x1b[35m[SELF-IMPROVE] Score ${verdict.score} < ${VISUAL_REVISION_THRESHOLD} — running visual revision pass ${s.visualRevisionAttempts}/${MAX_VISUAL_REVISIONS}...\x1b[0m\r\n`, sessionId, undefined, "journal");
+
+            const uiFiles = await readSandboxUiFiles(projectDir, 8);
+            if (uiFiles.length === 0) {
+              broadcast(`\x1b[33m[SELF-IMPROVE] No UI files found to revise — aborting loop.\x1b[0m\r\n`, sessionId, undefined, "journal");
+              return;
+            }
+            broadcast(`\x1b[36m[SELF-IMPROVE] Sending ${uiFiles.length} file(s) to writer with verdict feedback...\x1b[0m\r\n`, sessionId, undefined, "journal");
+
+            const revised = await requestVisualRevision(uiFiles, verdict, "(visual revision pass)", undefined, sessionId);
+            if (!revised || revised.length === 0) {
+              broadcast(`\x1b[33m[SELF-IMPROVE] Writer did not return revisions — keeping current design.\x1b[0m\r\n`, sessionId, undefined, "journal");
+              return;
+            }
+
+            // Write revised files back to the sandbox. Vite HMR will hot-reload them.
+            let writtenCount = 0;
+            for (const f of revised) {
+              try {
+                const abs = path.join(projectDir, f.path);
+                // Defensive: ensure path stays inside projectDir
+                if (!abs.startsWith(projectDir + path.sep) && abs !== projectDir) continue;
+                await fs.mkdir(path.dirname(abs), { recursive: true });
+                await fs.writeFile(abs, f.content, "utf-8");
+                writtenCount++;
+              } catch (wErr: any) {
+                broadcast(`\x1b[33m[SELF-IMPROVE] Could not write ${f.path}: ${wErr?.message?.slice(0, 80)}\x1b[0m\r\n`, sessionId, undefined, "journal");
+              }
+            }
+            broadcast(`\x1b[36m[SELF-IMPROVE] Wrote ${writtenCount} revised file(s). Waiting for Vite HMR...\x1b[0m\r\n`, sessionId, undefined, "journal");
+            broadcast("__REFRESH_FS__", sessionId, undefined, "journal");
+
+            // Give Vite HMR ~5 s to finish recompiling before we re-screenshot.
+            await new Promise(r => setTimeout(r, 5000));
+
+            const reShot = await captureVisualSnapshot(sessionId, targetUrl, `audit-revision-${s.visualRevisionAttempts}.png`);
+            if (!reShot) {
+              broadcast(`\x1b[33m[SELF-IMPROVE] Re-screenshot failed — exiting loop.\x1b[0m\r\n`, sessionId, undefined, "journal");
+              return;
+            }
+            broadcast(`__VISUAL_SNAPSHOT__:${reShot.filename}`, sessionId, undefined, "journal");
+            currentSnapshot = reShot.filename;
+            // Loop continues with the new snapshot.
           }
+
+          const finalState = activeProcesses.get(sessionId);
+          broadcast(`\x1b[33m[SELF-IMPROVE] Loop ended at cap. Best score this boot: ${finalState?.bestVisualScore ?? "?"}/100.\x1b[0m\r\n`, sessionId, undefined, "journal");
         } catch (vErr: any) {
           broadcast(`\x1b[33m[VISUAL AUDITOR] Error: ${String(vErr?.message || vErr).slice(0, 160)}\x1b[0m\r\n`, sessionId, undefined, "journal");
         }

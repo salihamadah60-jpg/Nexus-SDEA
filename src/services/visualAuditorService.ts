@@ -18,8 +18,10 @@
  */
 
 import fs from "fs/promises";
+import path from "path";
 import { GoogleGenAI } from "@google/genai";
 import { keyPool } from "./keyPoolService.js";
+import { requestAuditFix } from "./orchestratorService.js";
 
 export interface VisualIssue {
   severity: "high" | "medium" | "low";
@@ -192,3 +194,92 @@ export function formatVerdictForJournal(v: VisualVerdict): string {
   }
   return lines.join("\n");
 }
+
+/**
+ * Read the candidate UI files in a sandbox that are worth feeding to a visual revision pass.
+ * Limits to src/App.{tsx,jsx}, src/components/*.{tsx,jsx}, and src/index.css.
+ * Skips any file > 12 KB to keep prompt size manageable.
+ */
+export async function readSandboxUiFiles(
+  projectDir: string,
+  maxFiles = 8
+): Promise<Array<{ path: string; content: string }>> {
+  const out: Array<{ path: string; content: string }> = [];
+  const candidates: string[] = [];
+
+  // Top-level App + index.css
+  for (const rel of ["src/App.tsx", "src/App.jsx", "src/index.css"]) {
+    candidates.push(rel);
+  }
+
+  // src/components/*.{tsx,jsx}
+  try {
+    const compDir = path.join(projectDir, "src", "components");
+    const entries = await fs.readdir(compDir);
+    for (const e of entries) {
+      if (/\.(t|j)sx$/.test(e)) candidates.push(`src/components/${e}`);
+    }
+  } catch {}
+
+  for (const rel of candidates) {
+    if (out.length >= maxFiles) break;
+    try {
+      const abs = path.join(projectDir, rel);
+      const stat = await fs.stat(abs);
+      if (!stat.isFile() || stat.size > 12 * 1024) continue;
+      const content = await fs.readFile(abs, "utf-8");
+      out.push({ path: rel, content });
+    } catch {}
+  }
+  return out;
+}
+
+/**
+ * When the visual verdict scores below threshold, ask the writer model to
+ * regenerate the failing UI files using the verdict as the brief. Returns
+ * the merged file array (revised entries override originals by path), or
+ * null when no key is available / the call fails.
+ */
+export async function requestVisualRevision(
+  files: Array<{ path: string; content: string }>,
+  verdict: VisualVerdict,
+  userGoal: string,
+  taskId?: string,
+  sessionId?: string
+): Promise<Array<{ path: string; content: string }> | null> {
+  if (verdict.passed || files.length === 0) return null;
+
+  // Convert the visual verdict into the issues[] shape that requestAuditFix expects.
+  const issueLines: string[] = [];
+  issueLines.push(`VISUAL SCORE: ${verdict.score}/100 — ${verdict.summary}`);
+  for (const i of verdict.issues) {
+    issueLines.push(`[${i.severity.toUpperCase()} • ${i.category}] ${i.message}`);
+  }
+  for (const r of verdict.recommendations) {
+    issueLines.push(`RECOMMEND: ${r}`);
+  }
+  issueLines.push(
+    "Re-emit the affected UI files with these design problems FIXED.",
+    "Keep file paths and component exports identical so the import graph stays intact.",
+    "Apply the QUALITY BAR: ≥6 sections for landings, real @theme palette in index.css,",
+    "framer-motion entrance + scroll animations, lucide icons throughout, ≥6 visual-depth",
+    "signals (gradients, shadow-xl, backdrop-blur, ring-*), ≥10 responsive classes,",
+    "semantic HTML, real interactivity, and components ≥40 lines.",
+    "DO NOT regress to placeholder copy or 17-line stubs — the visual reviewer will see it."
+  );
+
+  try {
+    const revised = await requestAuditFix(
+      files,
+      issueLines,
+      `${userGoal}\n\nThis is a visual-quality revision pass. Address every issue above.`,
+      sessionId,
+      taskId
+    );
+    if (!revised || revised.length === 0) return null;
+    return revised;
+  } catch {
+    return null;
+  }
+}
+
