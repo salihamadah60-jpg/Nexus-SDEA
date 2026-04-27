@@ -1,5 +1,15 @@
 # Nexus AI Sovereign IDE v8.0 — Silent Operator
 
+## Phase 13 — Chat UX & Preview Fixes (2026-04-27)
+
+| # | Fix | Files | Summary |
+|---|-----|-------|---------|
+| 1 | **Preview proxy fixed** | `src/config/middleware.ts` | Removed a hardcoded `http-proxy-middleware` rule pointing at `localhost:3001` that intercepted every `/api/preview/:sessionId` request before the dynamic port proxy in `server.ts` could handle it, causing "Preview server not running on port 3001" on every session. Now the dynamic proxy in `server.ts` (which reads `session.port` at request time) is the sole handler. |
+| 2 | **Vite port-drift race fixed** | `src/services/autopilotService.ts` | `performVisualAudit` was called when the `"ready in"` line appeared — a chunk that arrives *before* the `"Local: http://localhost:PORT/"` line. The port hadn't been detected yet, so the audit probed the wrong port. Now the audit only fires on the `Local:/Network:/Available on:` line, which always carries the confirmed port. |
+| 3 | **Buttons always visible** | `src/components/ChatPanel.tsx` | Changed action-row opacity from `opacity-0 hover:opacity-100` (invisible on mobile/touch) to `opacity-40 hover:opacity-100`. All file Open buttons in `ReadFileGroup` and `WriteFileCard` changed from `opacity-0 group-hover:opacity-100` to always-visible. |
+| 4 | **13.7 Action Groups** | `src/components/ChatPanel.tsx` | Added `ActionGroupChip` component that collapses all tool-call cards (file reads, file writes, terminals, screenshot) into a single `"N actions ▸"` chip. Collapsed by default; auto-expanded when there are terminal failures. Replaces the previous individual expanded cards in `NexusMessageBubble`, fixing the formatting-change-on-reload issue (previously cards appeared expanded after session reload). |
+| 5 | **View Diff button** | `src/components/ChatPanel.tsx`, `src/types.ts`, `src/services/aiService.ts` | `WriteFileCard` now shows a **Diff** button when `beforeContent` is available. Clicking opens `DiffModal`, which fetches the current file content from `/api/files/content` and renders a unified line diff (deletions in red, insertions in green). `aiService.ts` now reads the old file content before writing and includes it as `beforeContent` in the `nexus_file_write` SSE event. `FileWriteEntry` type extended with `beforeContent?: string`. |
+
 ## Phase 12.8 — Self-Healing History Panel (2026-04-26)
 
 | # | Feature | Files | Summary |

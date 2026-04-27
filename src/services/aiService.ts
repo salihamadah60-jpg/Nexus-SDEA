@@ -997,13 +997,16 @@ export function createChatHandler(broadcast: (data: string, sid?: string) => voi
         try {
           const targetPath = await validatePath(sessionId, file.path, true);
           await fs.mkdir(path.dirname(targetPath), { recursive: true });
+          // Capture old content for View Diff (limit to 20KB to avoid bloat)
+          let beforeContent = '';
+          try { beforeContent = (await fs.readFile(targetPath, 'utf-8')).slice(0, 20000); } catch {}
           // Sanitize CSS files: strip invalid // comments that break Tailwind v4 Vite plugin
           const sanitizedContent = file.path.endsWith('.css')
             ? sanitizeCssContent(file.content)
             : file.content;
           await fs.writeFile(targetPath, sanitizedContent);
           fileResults.push({ path: file.path, size: file.content.length });
-          send({ nexus_file_write: { path: file.path, size: file.content.length } });
+          send({ nexus_file_write: { path: file.path, size: file.content.length, beforeContent } });
           
           await syncProjectBlueprint(sessionId, file.path);
 

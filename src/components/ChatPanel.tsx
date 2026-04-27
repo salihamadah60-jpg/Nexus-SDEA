@@ -7,7 +7,7 @@ import {
   Terminal, ListChecks, FolderOpen, FileCode, Camera, CheckCircle2,
   XCircle, Loader2, AlertCircle, ExternalLink, Play, KeyRound, MessageSquare,
   GitBranch, Shield, CornerDownRight, Lightbulb, BookOpen, Pencil,
-  FlaskConical, Eye, ArrowRight, X, Maximize2, GitCommit, LayoutList,
+  FlaskConical, Eye, ArrowRight, X, Maximize2, GitCommit, LayoutList, FileDiff,
 } from 'lucide-react';
 import { cn } from '../utils';
 import Markdown from 'react-markdown';
@@ -104,7 +104,7 @@ function ReadFileGroup({ paths, onOpen }: { paths: string[]; onOpen: (p: string)
             <span className="text-[10px] font-mono text-text-dim/60 truncate flex-1">{p}</span>
             <button
               onClick={() => onOpen(p)}
-              className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 text-[8px] font-bold uppercase tracking-widest text-nexus-cyan/70 hover:text-nexus-cyan px-1.5 py-0.5 rounded border border-nexus-cyan/20 hover:border-nexus-cyan/40"
+              className="flex items-center gap-1 text-[8px] font-bold uppercase tracking-widest text-nexus-cyan/60 hover:text-nexus-cyan px-1.5 py-0.5 rounded border border-nexus-cyan/20 hover:border-nexus-cyan/40 transition-colors"
             >
               <ExternalLink size={8} /> Open
             </button>
@@ -142,7 +142,7 @@ function ReadFileGroup({ paths, onOpen }: { paths: string[]; onOpen: (p: string)
                   <span className="text-[10px] font-mono text-text-dim/55 truncate flex-1">{p}</span>
                   <button
                     onClick={() => onOpen(p)}
-                    className="opacity-0 group-hover:opacity-100 transition-opacity text-[8px] text-nexus-cyan/60 hover:text-nexus-cyan"
+                    className="text-[8px] text-nexus-cyan/50 hover:text-nexus-cyan transition-colors"
                   >
                     <ExternalLink size={8} />
                   </button>
@@ -156,20 +156,166 @@ function ReadFileGroup({ paths, onOpen }: { paths: string[]; onOpen: (p: string)
   );
 }
 
-function WriteFileCard({ file, onOpen }: { file: FileWriteEntry; onOpen: (p: string) => void }) {
-  const kb = (file.size / 1024).toFixed(1);
+// ─── Inline diff viewer (13.3 / issue #5) ────────────────────────────────────
+function computeLineDiff(before: string, after: string): Array<{ type: 'eq' | 'del' | 'ins'; text: string }> {
+  const a = before.split('\n');
+  const b = after.split('\n');
+  const out: Array<{ type: 'eq' | 'del' | 'ins'; text: string }> = [];
+  let i = 0, j = 0;
+  while (i < a.length || j < b.length) {
+    if (i < a.length && j < b.length && a[i] === b[j]) {
+      out.push({ type: 'eq', text: a[i] }); i++; j++;
+    } else if (i >= a.length) {
+      out.push({ type: 'ins', text: b[j++] });
+    } else if (j >= b.length) {
+      out.push({ type: 'del', text: a[i++] });
+    } else {
+      let matched = false;
+      for (let d = 1; d <= 10; d++) {
+        if (i + d < a.length && a[i + d] === b[j]) {
+          for (let k = 0; k < d; k++) out.push({ type: 'del', text: a[i + k] });
+          i += d; matched = true; break;
+        }
+        if (j + d < b.length && a[i] === b[j + d]) {
+          for (let k = 0; k < d; k++) out.push({ type: 'ins', text: b[j + k] });
+          j += d; matched = true; break;
+        }
+      }
+      if (!matched) { out.push({ type: 'del', text: a[i++] }); out.push({ type: 'ins', text: b[j++] }); }
+    }
+  }
+  return out;
+}
+
+function DiffModal({
+  file,
+  sessionId,
+  onClose,
+}: {
+  file: FileWriteEntry;
+  sessionId: string;
+  onClose: () => void;
+}) {
+  const [afterContent, setAfterContent] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch(`/api/files/content?sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(file.path)}`);
+        if (r.ok) { const d = await r.json(); setAfterContent(d.content || ''); }
+        else setAfterContent('');
+      } catch { setAfterContent(''); }
+      finally { setLoading(false); }
+    })();
+  }, [file.path, sessionId]);
+
+  const before = file.beforeContent ?? '';
+  const after = afterContent ?? '';
+  const diff = !loading ? computeLineDiff(before, after) : [];
+
+  const added   = diff.filter(l => l.type === 'ins').length;
+  const removed = diff.filter(l => l.type === 'del').length;
+
   return (
-    <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-nexus-green/15 bg-nexus-green/[0.03] group mb-1">
-      <CheckCircle2 size={10} className="text-nexus-green/70 shrink-0" />
-      <code className="text-[10px] font-mono text-nexus-green/80 truncate flex-1">{file.path}</code>
-      <span className="text-[9px] text-text-dim/30 shrink-0">{kb}kb</span>
-      <button
-        onClick={() => onOpen(file.path)}
-        className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 text-[8px] font-bold uppercase tracking-widest text-nexus-cyan/70 hover:text-nexus-cyan px-1.5 py-0.5 rounded border border-nexus-cyan/20 hover:border-nexus-cyan/40 shrink-0"
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[9999] bg-black/80 flex items-center justify-center p-6"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ scale: 0.95, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        exit={{ scale: 0.95, opacity: 0 }}
+        transition={{ duration: 0.18 }}
+        className="bg-bg-surface border border-white/10 rounded-2xl overflow-hidden shadow-2xl w-full max-w-3xl max-h-[80vh] flex flex-col"
+        onClick={e => e.stopPropagation()}
       >
-        <ExternalLink size={8} /> Open
-      </button>
-    </div>
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-white/10 shrink-0">
+          <FileDiff size={12} className="text-nexus-cyan/70" />
+          <code className="text-[11px] font-mono text-text-main flex-1 truncate">{file.path}</code>
+          <span className="text-[9px] text-nexus-green font-bold">+{added}</span>
+          <span className="text-[9px] text-text-dim/30 mx-1">/</span>
+          <span className="text-[9px] text-red-400 font-bold">-{removed}</span>
+          <button onClick={onClose} className="p-1 rounded hover:bg-white/10 text-text-dim/40 hover:text-white transition-colors ml-2">
+            <X size={12} />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto custom-scrollbar">
+          {loading ? (
+            <div className="flex items-center justify-center h-32 text-text-dim/40">
+              <Loader2 size={16} className="animate-spin mr-2" />
+              <span className="text-[11px]">Loading diff…</span>
+            </div>
+          ) : diff.length === 0 ? (
+            <div className="flex items-center justify-center h-32 text-text-dim/30 text-[11px]">No changes detected</div>
+          ) : (
+            <div className="font-mono text-[10px] leading-relaxed">
+              {diff.map((line, idx) => (
+                <div
+                  key={idx}
+                  className={cn(
+                    'px-4 py-0.5 whitespace-pre-wrap break-all',
+                    line.type === 'del' ? 'bg-red-400/[0.08] text-red-400/90' :
+                    line.type === 'ins' ? 'bg-nexus-green/[0.08] text-nexus-green/90' :
+                    'text-text-dim/50'
+                  )}
+                >
+                  <span className="select-none mr-3 opacity-40">
+                    {line.type === 'del' ? '−' : line.type === 'ins' ? '+' : ' '}
+                  </span>
+                  {line.text}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+function WriteFileCard({
+  file,
+  sessionId,
+  onOpen,
+}: {
+  file: FileWriteEntry;
+  sessionId?: string;
+  onOpen: (p: string) => void;
+}) {
+  const [showDiff, setShowDiff] = useState(false);
+  const kb = (file.size / 1024).toFixed(1);
+  const hasDiff = !!file.beforeContent && !!sessionId;
+  return (
+    <>
+      <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-nexus-green/15 bg-nexus-green/[0.03] group mb-1">
+        <CheckCircle2 size={10} className="text-nexus-green/70 shrink-0" />
+        <code className="text-[10px] font-mono text-nexus-green/80 truncate flex-1">{file.path}</code>
+        <span className="text-[9px] text-text-dim/30 shrink-0">{kb}kb</span>
+        {hasDiff && (
+          <button
+            onClick={() => setShowDiff(true)}
+            className="flex items-center gap-1 text-[8px] font-bold uppercase tracking-widest text-nexus-gold/70 hover:text-nexus-gold px-1.5 py-0.5 rounded border border-nexus-gold/20 hover:border-nexus-gold/40 shrink-0 transition-colors"
+          >
+            <FileDiff size={8} /> Diff
+          </button>
+        )}
+        <button
+          onClick={() => onOpen(file.path)}
+          className="flex items-center gap-1 text-[8px] font-bold uppercase tracking-widest text-nexus-cyan/70 hover:text-nexus-cyan px-1.5 py-0.5 rounded border border-nexus-cyan/20 hover:border-nexus-cyan/40 shrink-0 transition-colors"
+        >
+          <ExternalLink size={8} /> Open
+        </button>
+      </div>
+      <AnimatePresence>
+        {showDiff && sessionId && (
+          <DiffModal file={file} sessionId={sessionId} onClose={() => setShowDiff(false)} />
+        )}
+      </AnimatePresence>
+    </>
   );
 }
 
@@ -387,6 +533,83 @@ function ActionChain({ steps }: { steps: string[] }) {
   );
 }
 
+// ─── Action group chip (13.7) ────────────────────────────────────────────────
+function ActionGroupChip({
+  filesRead,
+  filesModified,
+  terminals,
+  screenshot,
+  sessionId,
+  onOpenFile,
+}: {
+  filesRead: string[];
+  filesModified: FileWriteEntry[];
+  terminals: TerminalEntry[];
+  screenshot?: string;
+  sessionId: string;
+  onOpenFile: (p: string) => void;
+}) {
+  const hasFailure = terminals.some(t => !t.success);
+  const [expanded, setExpanded] = useState(hasFailure);
+
+  const total = filesRead.length + filesModified.length + terminals.length + (screenshot ? 1 : 0);
+  if (total === 0) return null;
+
+  return (
+    <div className="mb-2 rounded-xl border border-white/[0.07] bg-white/[0.02] overflow-hidden">
+      <button
+        onClick={() => setExpanded(v => !v)}
+        className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-white/[0.03] transition-colors"
+      >
+        <div className="flex items-center gap-1 text-text-dim/40">
+          {filesRead.length > 0 && <BookOpen size={9} />}
+          {filesModified.length > 0 && <Pencil size={9} />}
+          {terminals.length > 0 && <Terminal size={9} />}
+          {screenshot && <Camera size={9} />}
+        </div>
+        <span className="text-[9px] font-bold text-text-dim/50 uppercase tracking-[0.15em] flex-1 text-left">
+          {total} action{total !== 1 ? 's' : ''}
+        </span>
+        {hasFailure && (
+          <span className="text-[8px] text-red-400 font-bold px-1.5 py-0.5 rounded bg-red-400/10 mr-1">
+            ERRORS
+          </span>
+        )}
+        {expanded
+          ? <ChevronDown size={9} className="text-text-dim/30" />
+          : <ChevronRight size={9} className="text-text-dim/30" />
+        }
+      </button>
+      <AnimatePresence initial={false}>
+        {expanded && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="overflow-hidden border-t border-white/5"
+          >
+            <div className="p-2 space-y-1">
+              {filesRead.length > 0 && (
+                <ReadFileGroup paths={filesRead} onOpen={onOpenFile} />
+              )}
+              {filesModified.map((f, i) => (
+                <WriteFileCard key={i} file={f} sessionId={sessionId} onOpen={onOpenFile} />
+              ))}
+              {terminals.map((t, i) => (
+                <RunShellCard key={i} entry={t} />
+              ))}
+              {screenshot && (
+                <InlineScreenshot sessionId={sessionId} filename={screenshot} />
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 // ─── Streaming indicator ─────────────────────────────────────────────────────
 function StreamingIndicator({ metadata }: { metadata?: ChatMessageMetadata }) {
   const latestStatus = metadata?.statusHistory?.slice(-1)[0] || 'Neural synthesis in progress...';
@@ -484,33 +707,25 @@ function NexusMessageBubble({
         <ThinkingBlock content={thoughtText} ms={meta?.thinkingMs} />
       )}
 
-      {/* 13.1 — Action cards, in phase order */}
+      {/* 13.1 + 13.7 — Action cards grouped into a collapsible chip */}
       {!isStreaming && (
         <div className="space-y-0.5">
-          {/* 13.4 — Phase labels from statusHistory */}
+          {/* 13.4 — Phase labels */}
           {meta?.phase && <PhaseLabel phase={meta.phase} />}
 
-          {/* 13.1 — Plan / Action chain */}
+          {/* 13.1 — Plan / Action chain (shown separately — it's structural) */}
           {hasChain && <ActionChain steps={meta!.actionChain!} />}
 
-          {/* 13.1 — Files read (grouped if >2) */}
-          {hasFilesRead && (
-            <ReadFileGroup paths={meta!.filesRead!} onOpen={onOpenFile} />
-          )}
-
-          {/* 13.1 — Files written */}
-          {hasFilesWritten && meta!.filesModified!.map((f, i) => (
-            <WriteFileCard key={i} file={f} onOpen={onOpenFile} />
-          ))}
-
-          {/* 13.1 — Terminal commands */}
-          {hasTerminals && meta!.terminals!.map((t, i) => (
-            <RunShellCard key={i} entry={t} />
-          ))}
-
-          {/* 13.5 — Inline screenshot */}
-          {hasScreenshot && sessionId && (
-            <InlineScreenshot sessionId={sessionId} filename={meta!.screenshot!} />
+          {/* 13.7 — All tool-call cards grouped into one collapsed chip */}
+          {(hasFilesRead || hasFilesWritten || hasTerminals || hasScreenshot) && (
+            <ActionGroupChip
+              filesRead={meta?.filesRead || []}
+              filesModified={meta?.filesModified || []}
+              terminals={meta?.terminals || []}
+              screenshot={meta?.screenshot}
+              sessionId={sessionId}
+              onOpenFile={onOpenFile}
+            />
           )}
         </div>
       )}
@@ -866,7 +1081,7 @@ export function ChatPanel() {
 
             {/* Action row */}
             <div className={cn(
-              'flex items-center gap-1 px-1 mt-1 opacity-0 hover:opacity-100 focus-within:opacity-100 transition-opacity',
+              'flex items-center gap-1 px-1 mt-1 opacity-40 hover:opacity-100 focus-within:opacity-100 transition-opacity',
               msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'
             )}>
               {/* Inline delete confirmation */}

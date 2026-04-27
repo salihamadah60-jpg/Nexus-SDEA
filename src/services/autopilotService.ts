@@ -504,7 +504,10 @@ async function startDevServer(
 
     sessionState.devProcess = dev;
 
-    const readyPattern = /ready in|Local:|Network:|started server|listening on|http:\/\/localhost|Available on:|compiled successfully|webpack compiled/i;
+    // Only fire when the "Local:" URL line appears — this line always carries the
+    // actual port chosen by Vite, so we never call performVisualAudit with the wrong port.
+    const localLinePattern = /Local:|Network:|Available on:|started server on|listening on/i;
+    const fallbackReadyPattern = /compiled successfully|webpack compiled/i;
     // Vite drifts ports when requested port is busy — parse the real port from stdout.
     // Matches: "Local:   http://localhost:3003/" or "  ➜  Local:   http://localhost:3003/"
     const portDetectPattern = /(?:Local|localhost):.*?:(\d{4,5})\/?/i;
@@ -513,7 +516,7 @@ async function startDevServer(
       const output = data.toString();
       broadcast(`\x1b[32m[DEV] ${output}\x1b[0m`, sessionId, undefined, "journal");
 
-      // Detect actual port chosen by Vite (may differ from requested when port was busy)
+      // 1. Detect actual port chosen by Vite (must happen before ready check below)
       const portMatch = output.match(portDetectPattern);
       if (portMatch) {
         const detectedPort = parseInt(portMatch[1], 10);
@@ -523,7 +526,12 @@ async function startDevServer(
         }
       }
 
-      if (readyPattern.test(output) && sessionState!.status !== "READY") {
+      // 2. Only trigger the visual audit once the Local URL line (with confirmed port) has appeared.
+      //    "ready in" arrives in a separate earlier chunk *before* the Local URL — calling
+      //    performVisualAudit there would use the stale port and produce a 503.
+      const isLocalLine = localLinePattern.test(output);
+      const isFallbackReady = fallbackReadyPattern.test(output);
+      if ((isLocalLine || isFallbackReady) && sessionState!.status !== "READY") {
         performVisualAudit(sessionId, projectDir, sessionState!.port, broadcast);
       }
     });

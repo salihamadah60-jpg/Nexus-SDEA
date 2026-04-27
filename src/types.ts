@@ -20,6 +20,7 @@ export interface FileWriteEntry {
   path: string;
   size: number;
   preview?: string;
+  beforeContent?: string;
 }
 
 export interface ChatMessageMetadata {
