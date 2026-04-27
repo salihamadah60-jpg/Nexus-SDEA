@@ -9,6 +9,9 @@ export default defineConfig({
     alias: {
       '@': path.resolve(__dirname, '.'),
     },
+    // Prevent dual-React instances that cause "Cannot read properties of null (reading 'useState')"
+    // This happens when sandbox node_modules shadow the root React version.
+    dedupe: ['react', 'react-dom', 'motion/react'],
   },
   server: {
     host: '0.0.0.0',

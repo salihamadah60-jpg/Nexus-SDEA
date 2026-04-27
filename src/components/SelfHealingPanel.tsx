@@ -2,7 +2,7 @@ import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react'
 import {
   ShieldCheck, Zap, Bot, CheckCircle2, XCircle, Clock,
   ChevronDown, ChevronRight, Trash2, RefreshCw, AlertTriangle, RotateCcw,
-  Check, Layers,
+  Check, Layers, Monitor, Power, PowerOff, ServerCrash, Activity,
 } from 'lucide-react';
 import { useNexus } from '../NexusContext';
 import { cn } from '../utils';
@@ -324,6 +324,179 @@ function StatsBar({ events }: { events: HealEvent[] }) {
 // ── Batch "Heal All Failed" ─────────────────────────────────────────────────
 type BatchState = 'idle' | 'running' | 'done';
 
+// ── Sandbox status types (mirror autopilotService) ────────────────────────
+type SandboxStatus = 'IDLE' | 'INSTALLING' | 'STARTING' | 'READY' | 'ERROR';
+
+interface SandboxSession {
+  sessionId: string;
+  status: SandboxStatus;
+  port: number;
+  projectDir: string;
+  startAttempts: number;
+  installAttempts: number;
+}
+
+const SANDBOX_STATUS_META: Record<SandboxStatus, { color: string; icon: any; label: string }> = {
+  READY:      { color: 'text-nexus-green  border-nexus-green/30  bg-nexus-green/10',  icon: CheckCircle2,  label: 'Ready'      },
+  STARTING:   { color: 'text-nexus-gold   border-nexus-gold/30   bg-nexus-gold/10',   icon: RefreshCw,     label: 'Starting'   },
+  INSTALLING: { color: 'text-nexus-cyan   border-nexus-cyan/30   bg-nexus-cyan/10',   icon: Activity,      label: 'Installing' },
+  IDLE:       { color: 'text-text-dim/50  border-white/10        bg-white/[0.02]',    icon: Clock,         label: 'Idle'       },
+  ERROR:      { color: 'text-red-400      border-red-400/30      bg-red-400/10',      icon: ServerCrash,   label: 'Error'      },
+};
+
+// ── Sandbox Monitor ─────────────────────────────────────────────────────────
+function SandboxMonitor({ currentSessionId }: { currentSessionId: string | null }) {
+  const [sessions, setSessions] = useState<SandboxSession[]>([]);
+  const [actionState, setActionState] = useState<Record<string, 'boot' | 'kill' | null>>({});
+  const [collapsed, setCollapsed] = useState(false);
+
+  // Poll every 3s
+  useEffect(() => {
+    let alive = true;
+    const poll = async () => {
+      try {
+        const r = await fetch('/api/autopilot/sessions');
+        if (r.ok) {
+          const d = await r.json();
+          if (alive) setSessions(d.sessions || []);
+        }
+      } catch {}
+    };
+    poll();
+    const iv = setInterval(poll, 3000);
+    return () => { alive = false; clearInterval(iv); };
+  }, []);
+
+  const handleBoot = async (sessionId: string) => {
+    setActionState(prev => ({ ...prev, [sessionId]: 'boot' }));
+    try {
+      await fetch(`/api/autopilot/sessions/${encodeURIComponent(sessionId)}/boot`, { method: 'POST' });
+    } catch {}
+    setTimeout(() => setActionState(prev => ({ ...prev, [sessionId]: null })), 3000);
+  };
+
+  const handleKill = async (sessionId: string) => {
+    setActionState(prev => ({ ...prev, [sessionId]: 'kill' }));
+    try {
+      await fetch(`/api/autopilot/sessions/${encodeURIComponent(sessionId)}/kill`, { method: 'POST' });
+    } catch {}
+    setTimeout(() => setActionState(prev => ({ ...prev, [sessionId]: null })), 2000);
+  };
+
+  const readyCount    = sessions.filter(s => s.status === 'READY').length;
+  const errorCount    = sessions.filter(s => s.status === 'ERROR').length;
+  const runningCount  = sessions.filter(s => s.status === 'STARTING' || s.status === 'INSTALLING').length;
+
+  return (
+    <div className="border-b border-white/5 shrink-0">
+      {/* Section header */}
+      <button
+        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-white/[0.02] transition-colors"
+        onClick={() => setCollapsed(v => !v)}
+      >
+        <Monitor size={10} className="text-nexus-cyan/70 shrink-0" />
+        <span className="text-[9px] font-black uppercase tracking-widest text-text-dim/70 flex-1 text-left">Sandbox Monitor</span>
+        <div className="flex items-center gap-1.5 mr-1">
+          {readyCount > 0    && <span className="text-[8px] font-bold text-nexus-green">{readyCount} ready</span>}
+          {runningCount > 0  && <span className="text-[8px] font-bold text-nexus-gold">{runningCount} running</span>}
+          {errorCount > 0    && <span className="text-[8px] font-bold text-red-400">{errorCount} error</span>}
+          {sessions.length === 0 && <span className="text-[8px] text-text-dim/30">no sandboxes</span>}
+        </div>
+        {collapsed ? <ChevronRight size={10} className="text-text-dim/40" /> : <ChevronDown size={10} className="text-text-dim/40" />}
+      </button>
+
+      {!collapsed && (
+        <div className="px-2 pb-2 space-y-1">
+          {sessions.length === 0 ? (
+            <p className="text-[9px] text-text-dim/30 text-center py-3">
+              No active sandboxes. Start a build to see them here.
+            </p>
+          ) : (
+            sessions.map(s => {
+              const meta = SANDBOX_STATUS_META[s.status] ?? SANDBOX_STATUS_META.IDLE;
+              const StatusIcon = meta.icon;
+              const isActive = s.sessionId === currentSessionId;
+              const acting = actionState[s.sessionId];
+              const shortId = s.sessionId.slice(-8);
+              const dirName = s.projectDir.split('/').pop() || s.sessionId;
+
+              return (
+                <div
+                  key={s.sessionId}
+                  className={cn(
+                    'rounded-lg border px-2.5 py-2 flex flex-col gap-1.5 transition-all',
+                    isActive ? 'border-nexus-cyan/20 bg-nexus-cyan/[0.03]' : 'border-white/5 bg-white/[0.02]'
+                  )}
+                >
+                  {/* Row 1 — identity + status */}
+                  <div className="flex items-center gap-2">
+                    {isActive && <span className="text-[7px] font-black text-nexus-cyan uppercase tracking-widest">Active</span>}
+                    <code className="text-[9px] font-mono text-text-dim/70 flex-1 truncate" title={s.sessionId}>
+                      {dirName}
+                      <span className="text-text-dim/30 ml-1">#{shortId}</span>
+                    </code>
+                    {/* Port badge */}
+                    <span className="text-[8px] font-mono text-text-dim/50 shrink-0">:{s.port}</span>
+                    {/* Status badge */}
+                    <div className={cn('flex items-center gap-1 px-1.5 py-0.5 rounded-full border text-[7px] font-bold uppercase tracking-widest shrink-0', meta.color)}>
+                      <StatusIcon size={8} className={s.status === 'STARTING' || s.status === 'INSTALLING' ? 'animate-spin' : ''} />
+                      {meta.label}
+                    </div>
+                  </div>
+
+                  {/* Row 2 — action buttons + attempts */}
+                  <div className="flex items-center gap-1.5">
+                    {s.startAttempts > 0 && (
+                      <span className="text-[7px] text-text-dim/30 font-mono">boot×{s.startAttempts}</span>
+                    )}
+                    <div className="flex-1" />
+                    {/* Boot button */}
+                    <button
+                      onClick={() => handleBoot(s.sessionId)}
+                      disabled={acting === 'boot' || s.status === 'STARTING' || s.status === 'INSTALLING'}
+                      title="Trigger fresh boot"
+                      className={cn(
+                        'flex items-center gap-1 px-2 py-0.5 rounded border text-[7px] font-bold uppercase tracking-widest transition-all',
+                        acting === 'boot'
+                          ? 'bg-nexus-gold/10 border-nexus-gold/30 text-nexus-gold cursor-wait opacity-70'
+                          : 'bg-nexus-green/5 border-nexus-green/20 text-nexus-green/70 hover:bg-nexus-green/15 hover:border-nexus-green/40 hover:text-nexus-green'
+                      )}
+                    >
+                      {acting === 'boot'
+                        ? <RefreshCw size={8} className="animate-spin" />
+                        : <Power size={8} />}
+                      Boot
+                    </button>
+                    {/* Kill button */}
+                    <button
+                      onClick={() => handleKill(s.sessionId)}
+                      disabled={acting === 'kill' || s.status === 'IDLE'}
+                      title="Kill dev server process"
+                      className={cn(
+                        'flex items-center gap-1 px-2 py-0.5 rounded border text-[7px] font-bold uppercase tracking-widest transition-all',
+                        acting === 'kill'
+                          ? 'bg-red-400/10 border-red-400/30 text-red-400 cursor-wait opacity-70'
+                          : s.status === 'IDLE'
+                            ? 'opacity-30 cursor-not-allowed bg-white/[0.02] border-white/5 text-text-dim/30'
+                            : 'bg-red-400/5 border-red-400/20 text-red-400/70 hover:bg-red-400/15 hover:border-red-400/40 hover:text-red-400'
+                      )}
+                    >
+                      {acting === 'kill'
+                        ? <RefreshCw size={8} className="animate-spin" />
+                        : <PowerOff size={8} />}
+                      Kill
+                    </button>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main panel ─────────────────────────────────────────────────────────────
 export function SelfHealingPanel() {
   const { state } = useNexus();
@@ -431,9 +604,12 @@ export function SelfHealingPanel() {
       : `Heal All (${retryableEvents.length})`;
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full overflow-hidden">
+      {/* Sandbox Monitor — live status for every active dev server */}
+      <SandboxMonitor currentSessionId={sessionId} />
+
       {/* Header */}
-      <div className="flex items-center justify-between px-4 pt-4 pb-2 shrink-0">
+      <div className="flex items-center justify-between px-4 pt-3 pb-2 shrink-0">
         <div className="flex items-center gap-2">
           <ShieldCheck size={13} className="text-nexus-green" />
           <h3 className="nexus-label mb-0">Self-Healing</h3>

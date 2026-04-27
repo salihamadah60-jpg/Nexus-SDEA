@@ -225,6 +225,9 @@ A line flips to ✅ only when **all three** are true:
 | **13.P2** Vite crash retry | `dev.on("close")` silently went `STARTING→IDLE` with no retry when Vite exited during startup | `autopilotService.ts` |
 | **13.P3** vite.config.ts enforcer | AI-written configs never included `allowedHosts:true` / `hmr:{clientPort:443}` — Replit proxy rejected the iframe | `autopilotService.ts`, `aiService.ts` |
 | **13.P4** Confirmation = BUILD | "yes"/"ok"/"continue" classified as `question` → Nexus answered with prose instead of writing files | `intentService.ts` |
+| **13.P5** React dedupe | Sandbox `node_modules/react` shadowed root React → `useState` called on null dispatcher → AnimatePresence crash cascade | `vite.config.ts` |
+| **13.P6** Sandbox Monitor | Live dashboard for every active dev server (status, port, Boot/Kill actions) | `autopilotService.ts`, `server.ts`, `SelfHealingPanel.tsx` |
+| **13.P7** DiffModal actions | "Copy Diff" + "Revert File" buttons in every file-diff modal; revert uses two-step confirm flow | `ChatPanel.tsx` |
 
 ### Hotfixes applied post stress-test (April 2026) ✅
 

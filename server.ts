@@ -12,7 +12,7 @@ import { createChatHandler } from "./src/services/aiService.js";
 import { SANDBOX_BASE } from "./src/config/backendConstants.js";
 import fs from "fs/promises";
 import { existsSync } from "fs";
-import { setupAutopilot, getSessionData } from "./src/services/autopilotService.js";
+import { setupAutopilot, getSessionData, getAllSessionStatuses, killSession, triggerSessionBoot } from "./src/services/autopilotService.js";
 import { e2bManager } from "./src/services/e2bService.js";
 import { acquirePort, registerNexusPort } from "./src/services/portService.js";
 import { performPreFlightCleanup } from "./src/services/journalService.js";
@@ -158,6 +158,36 @@ async function bootstrap() {
 
   app.get("/api/e2b/status", (req, res) => {
     res.json({ active: !!process.env.E2B_API_KEY });
+  });
+
+  // ── Sandbox Self-Healing Dashboard API ──────────────────────────────────────
+  // GET  /api/autopilot/sessions  — list all active sandboxes + their status
+  // POST /api/autopilot/sessions/:sessionId/kill  — SIGTERM the dev server
+  // POST /api/autopilot/sessions/:sessionId/boot  — trigger a fresh boot
+  app.get("/api/autopilot/sessions", (_req, res) => {
+    res.json({ sessions: getAllSessionStatuses() });
+  });
+
+  app.post("/api/autopilot/sessions/:sessionId/kill", (req, res) => {
+    const { sessionId } = req.params;
+    if (!sessionId || /[/\\]/.test(sessionId)) return res.status(400).json({ error: "Bad session id" });
+    try {
+      killSession(sessionId);
+      res.json({ ok: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/autopilot/sessions/:sessionId/boot", async (req, res) => {
+    const { sessionId } = req.params;
+    if (!sessionId || /[/\\]/.test(sessionId)) return res.status(400).json({ error: "Bad session id" });
+    try {
+      await triggerSessionBoot(sessionId, broadcast);
+      res.json({ ok: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // Direct static-file preview for sandbox sessions. Serves whatever the

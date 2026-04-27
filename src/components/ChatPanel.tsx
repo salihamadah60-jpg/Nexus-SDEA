@@ -187,6 +187,8 @@ function computeLineDiff(before: string, after: string): Array<{ type: 'eq' | 'd
   return out;
 }
 
+type RevertState = 'idle' | 'confirm' | 'reverting' | 'done' | 'error';
+
 function DiffModal({
   file,
   sessionId,
@@ -198,6 +200,8 @@ function DiffModal({
 }) {
   const [afterContent, setAfterContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [copyFlash, setCopyFlash] = useState(false);
+  const [revertState, setRevertState] = useState<RevertState>('idle');
 
   useEffect(() => {
     (async () => {
@@ -217,13 +221,49 @@ function DiffModal({
   const added   = diff.filter(l => l.type === 'ins').length;
   const removed = diff.filter(l => l.type === 'del').length;
 
+  const handleCopyDiff = () => {
+    if (!diff.length) return;
+    const text = diff.map(l =>
+      `${l.type === 'del' ? '-' : l.type === 'ins' ? '+' : ' '} ${l.text}`
+    ).join('\n');
+    navigator.clipboard.writeText(`--- ${file.path} (before)\n+++ ${file.path} (after)\n${text}`)
+      .then(() => { setCopyFlash(true); setTimeout(() => setCopyFlash(false), 1500); })
+      .catch(() => {});
+  };
+
+  const handleRevert = async () => {
+    if (revertState === 'idle') { setRevertState('confirm'); return; }
+    if (revertState === 'confirm') {
+      setRevertState('reverting');
+      try {
+        const r = await fetch('/api/files', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId, path: file.path, content: before }),
+        });
+        if (r.ok) {
+          setRevertState('done');
+          setTimeout(() => onClose(), 1200);
+        } else {
+          setRevertState('error');
+          setTimeout(() => setRevertState('idle'), 2500);
+        }
+      } catch {
+        setRevertState('error');
+        setTimeout(() => setRevertState('idle'), 2500);
+      }
+    }
+  };
+
+  const canRevert = !!before && !!sessionId && !loading;
+
   return (
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       className="fixed inset-0 z-[9999] bg-black/80 flex items-center justify-center p-6"
-      onClick={onClose}
+      onClick={revertState === 'confirm' ? () => setRevertState('idle') : onClose}
     >
       <motion.div
         initial={{ scale: 0.95, opacity: 0 }}
@@ -239,7 +279,72 @@ function DiffModal({
           <span className="text-[9px] text-nexus-green font-bold">+{added}</span>
           <span className="text-[9px] text-text-dim/30 mx-1">/</span>
           <span className="text-[9px] text-red-400 font-bold">-{removed}</span>
-          <button onClick={onClose} className="p-1 rounded hover:bg-white/10 text-text-dim/40 hover:text-white transition-colors ml-2">
+
+          {/* ── Copy Diff ── */}
+          {!loading && diff.length > 0 && (
+            <button
+              onClick={handleCopyDiff}
+              title="Copy unified diff to clipboard"
+              className={cn(
+                'flex items-center gap-1 px-2 py-0.5 rounded border text-[8px] font-bold uppercase tracking-widest transition-all',
+                copyFlash
+                  ? 'bg-nexus-green/15 border-nexus-green/40 text-nexus-green'
+                  : 'bg-white/[0.04] border-white/10 text-text-dim/60 hover:text-nexus-cyan hover:border-nexus-cyan/30 hover:bg-nexus-cyan/5'
+              )}
+            >
+              {copyFlash ? <Check size={9} /> : <Copy size={9} />}
+              {copyFlash ? 'Copied!' : 'Copy Diff'}
+            </button>
+          )}
+
+          {/* ── Revert File ── */}
+          {canRevert && (
+            <div className="flex items-center gap-1">
+              {revertState === 'confirm' ? (
+                <>
+                  <span className="text-[8px] text-red-400/80 font-bold tracking-widest">Restore original?</span>
+                  <button
+                    onClick={handleRevert}
+                    className="flex items-center gap-1 px-2 py-0.5 rounded border text-[8px] font-bold uppercase tracking-widest bg-red-400/15 border-red-400/50 text-red-400 hover:bg-red-400/25 transition-all"
+                  >
+                    <RotateCcw size={9} /> Confirm
+                  </button>
+                  <button
+                    onClick={() => setRevertState('idle')}
+                    className="px-2 py-0.5 rounded border text-[8px] font-bold uppercase tracking-widest bg-white/5 border-white/10 text-text-dim/50 hover:text-white transition-all"
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={handleRevert}
+                  disabled={revertState === 'reverting' || revertState === 'done'}
+                  title="Restore file to its state before Nexus last wrote it"
+                  className={cn(
+                    'flex items-center gap-1 px-2 py-0.5 rounded border text-[8px] font-bold uppercase tracking-widest transition-all',
+                    revertState === 'done'
+                      ? 'bg-nexus-green/15 border-nexus-green/40 text-nexus-green cursor-default'
+                    : revertState === 'reverting'
+                      ? 'bg-nexus-gold/10 border-nexus-gold/30 text-nexus-gold cursor-wait opacity-70'
+                    : revertState === 'error'
+                      ? 'bg-red-400/10 border-red-400/30 text-red-400'
+                    : 'bg-white/[0.04] border-white/10 text-text-dim/60 hover:text-red-400 hover:border-red-400/30 hover:bg-red-400/5'
+                  )}
+                >
+                  {revertState === 'reverting' ? <Loader2 size={9} className="animate-spin" /> :
+                   revertState === 'done'      ? <Check size={9} /> :
+                   revertState === 'error'     ? <AlertCircle size={9} /> :
+                   <RotateCcw size={9} />}
+                  {revertState === 'done'    ? 'Reverted!' :
+                   revertState === 'reverting' ? 'Reverting…' :
+                   revertState === 'error'   ? 'Failed' : 'Revert File'}
+                </button>
+              )}
+            </div>
+          )}
+
+          <button onClick={onClose} className="p-1 rounded hover:bg-white/10 text-text-dim/40 hover:text-white transition-colors ml-1">
             <X size={12} />
           </button>
         </div>

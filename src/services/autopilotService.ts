@@ -711,6 +711,29 @@ export function getSessionData(sessionId: string) {
   return activeProcesses.get(sessionId);
 }
 
+/** Return a snapshot of all active sandbox sessions for the Self-Healing dashboard. */
+export function getAllSessionStatuses(): Array<{
+  sessionId: string;
+  status: SessionStatus;
+  port: number;
+  projectDir: string;
+  startAttempts: number;
+  installAttempts: number;
+}> {
+  const result: ReturnType<typeof getAllSessionStatuses> = [];
+  for (const [sessionId, proc] of activeProcesses.entries()) {
+    result.push({
+      sessionId,
+      status: proc.status,
+      port: proc.port,
+      projectDir: proc.projectDir,
+      startAttempts: proc.startAttempts,
+      installAttempts: proc.installAttempts,
+    });
+  }
+  return result;
+}
+
 /**
  * Fix 13.P — Vite config enforcer.
  *
