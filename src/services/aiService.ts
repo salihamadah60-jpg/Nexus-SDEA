@@ -494,6 +494,40 @@ Every UI you ship must look like a launched product, not a homework assignment.
 When the user says "high-end" / "modern" / "beautiful" / "premium" — that is a contract.
 You ship something they would screenshot and tweet, not something they would file a bug about.
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+QUALITY VERDICT — YOU ARE BEING GRADED ON EVERY OUTPUT (Phase 13.2):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Every batch of files you emit is scored 0–100 by an automated reviewer the
+moment you finish writing. The reviewer checks ALL of these statically:
+  ✓ Forbidden phrases ("Streamline Your Workflow", "Lorem ipsum", "Welcome to my app", "Feature One/Two/Three")
+  ✓ ≥3 numeric/stat claims in copy ("ships orders in 4.2s", "trusted by 12,000 teams")
+  ✓ A real @theme { --color-* } block in src/index.css
+  ✓ ≥6 sections / component imports for landing-style pages
+  ✓ framer-motion imported AND ≥3 <motion.*> elements
+  ✓ lucide-react imported in ≥2 files
+  ✓ ≥6 visual-depth signals (gradients, shadow-xl/2xl, backdrop-blur, ring-*)
+  ✓ ≥10 responsive classes (md:/lg:/xl:)
+  ✓ Semantic HTML (<header>/<nav>/<main>/<footer>)
+  ✓ Real interactivity (useState OR onClick/onChange/onSubmit)
+  ✓ No stub-sized components — non-trivial files must be ≥40 lines
+
+A score below 70 triggers an automatic revision pass that costs you a round-trip
+and gets logged to the user's history panel as a quality regression. Ship
+correct the FIRST time. If the user asks for a landing page, satisfy ALL
+reviewer checks in the initial emission — do not rely on revision to bail you out.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PLAN-FIRST PROTOCOL (mandatory before any non-trivial generation):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Before writing the FIRST [NEXUS:FILE] marker, your THOUGHT block MUST contain:
+  1. PRODUCT NAME + tagline (2 sentences max — invented brand)
+  2. PALETTE: the 4-6 hex colors you will put in @theme
+  3. FILE MAP: every file you intend to write, one per line, with a 1-line purpose
+  4. SECTION LIST: for landing pages, the ordered list of sections in App.tsx
+  5. INSTALL PLAN: one consolidated 'npm install' line (never split)
+This forces deliberate composition instead of wandering free-association.
+A THOUGHT block that skips any of these five items is itself a quality regression.
+
 ⚠️ CRITICAL CSS RULE — VIOLATION BREAKS THE BUILD:
 CSS files DO NOT support // comments. Only /* */ is valid CSS.
 src/index.css MUST begin with EXACTLY this on line 1, nothing before it, no // comments anywhere:
@@ -773,13 +807,24 @@ async function streamToBuffer(
 }
 
 function selectTieredModel(requestedModel: string, message: string, mode: string): string {
-  const complexKeywords = ['architecture', 'restructure', 'refactor large', 'database schema', 'scale', 'optimize'];
-  const isComplex = complexKeywords.some(k => message.toLowerCase().includes(k)) || mode === 'architecture';
-  
-  if (isComplex) {
-    return 'gemini-2.0-flash'; // High-reasoning tier (use confirmed-working model)
+  // Phase 13.2 — promote ANY UI/app/code-generation request to the high-reasoning
+  // tier. The cheap tier is reserved for chit-chat and one-line follow-ups.
+  const generativeKeywords = [
+    'build', 'create', 'make', 'design', 'redesign', 'generate', 'add', 'implement',
+    'landing', 'website', 'app', 'dashboard', 'page', 'component', 'feature',
+    'fix', 'refactor', 'optimize', 'restructure', 'architecture', 'database',
+    'api', 'route', 'endpoint', 'auth', 'login', 'signup', 'crud', 'form',
+    'beautiful', 'modern', 'premium', 'high-end', 'production', 'real',
+  ];
+  const lower = message.toLowerCase();
+  const isGenerative =
+    generativeKeywords.some(k => lower.includes(k)) ||
+    mode === 'architecture' || mode === 'coding' ||
+    message.length > 80; // anything longer than a one-liner
+
+  if (isGenerative) {
+    return 'gemini-2.0-flash'; // High-reasoning tier (cascades to gpt-4o in writer pass)
   }
-  
   return requestedModel;
 }
 
@@ -993,6 +1038,46 @@ export function createChatHandler(broadcast: (data: string, sid?: string) => voi
         } catch (fixErr: any) {
           send({ nexus_streaming: true, status: `Self-correction error: ${fixErr.message} — continuing with original files.` });
         }
+      }
+
+      // Phase 13.2 — Quality Verdict Reviewer
+      // Static-analysis grader against the 10-point Quality Bar.
+      // Runs BEFORE files hit disk so a failing verdict triggers ONE
+      // AI revision pass without burning a write/restart cycle.
+      try {
+        const { gradeFiles, requestQualityRevision } = await import('./qualityVerdictService.js');
+        const verdict = gradeFiles(parsed.filesToWrite, message);
+        send({ nexus_streaming: true, status: verdict.summary });
+        await logHistory({
+          taskId,
+          sessionId,
+          timestamp: new Date().toISOString(),
+          action: "quality_verdict",
+          details: { score: verdict.score, passed: verdict.passed, fails: verdict.fails.map(f => f.label) }
+        });
+        if (!verdict.passed) {
+          send({ nexus_streaming: true, status: `Quality Verdict ${verdict.score}/100 below threshold — running revision pass against ${verdict.fails.length} failing check(s)...` });
+          const revised = await requestQualityRevision(parsed.filesToWrite, verdict, message, taskId, sessionId);
+          if (revised && revised.length > 0) {
+            // Merge revisions into parsed.filesToWrite (override by path, append new)
+            const revMap = new Map(revised.map(f => [f.path, f.content]));
+            for (const f of parsed.filesToWrite) {
+              if (revMap.has(f.path)) f.content = revMap.get(f.path)!;
+            }
+            for (const [p, c] of revMap) {
+              if (!parsed.filesToWrite.some(f => f.path === p)) {
+                parsed.filesToWrite.push({ path: p, content: c });
+              }
+            }
+            // Re-grade after revision so the journal records the final score
+            const finalVerdict = gradeFiles(parsed.filesToWrite, message);
+            send({ nexus_streaming: true, status: `Quality Revision applied — score ${verdict.score} → ${finalVerdict.score}.` });
+          } else {
+            send({ nexus_streaming: true, status: `Quality Revision unavailable — shipping current files with verdict ${verdict.score}/100 logged.` });
+          }
+        }
+      } catch (vErr: any) {
+        console.warn('[NEXUS] Quality verdict error:', vErr?.message);
       }
 
       send({ nexus_streaming: true, status: `Sovereign Analysis: Mapping intent...` });
