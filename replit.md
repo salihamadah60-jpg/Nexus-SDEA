@@ -1,5 +1,13 @@
 # Nexus AI Sovereign IDE v8.0 — Silent Operator
 
+## Phase 13.3 — Visual Auditor (vision-model design grader) (2026-04-27)
+
+| # | Feature | Files | Summary |
+|---|---------|-------|---------|
+| 1 | **Visual Auditor service** | `src/services/visualAuditorService.ts` (new) | After the dev server boots and the puppeteer screenshot is captured, this service reads the PNG (≤8 MB), base64-encodes it, and sends it to Gemini 2.0 Flash multimodal with a strict senior-product-designer prompt. The model returns JSON: `{ score, summary, wins[], issues[{severity,category,message}], recommendations[] }`. Categories: layout, typography, color, imagery, copy, polish, accessibility. Hard rules in the system prompt (blank page ≤20, placeholder copy ≤35, flat single-section ≤50, only beautiful dense launches earn 80+) keep the grading honest. Cascades through the gemini key pool, returns null on failure so it never breaks the autopilot. |
+| 2 | **Wired into autopilot post-screenshot** | `src/services/autopilotService.ts` (`performVisualAudit`) | Immediately after `captureVisualSnapshot` succeeds, the auditor is invoked as a fire-and-forget IIFE — never blocks the dev server from going READY. The verdict is colour-coded into the journal (green ≥80, cyan ≥70, amber ≥50, red <50) with score, summary, top wins, top high-severity issues, and top recommendations. A structured `__VISUAL_VERDICT__:<json>` broadcast lets the existing Self-Healing panel render the full verdict card. |
+| 3 | **Verdict format helper** | `src/services/visualAuditorService.ts` (`formatVerdictForJournal`) | Compact one-line summary plus indented bullets — "Wins:", "Top issues:", "Next:" — so the terminal journal is readable without scrolling. |
+
 ## Phase 13.2 — Quality Verdict Reviewer + Plan-First Protocol (2026-04-27)
 
 | # | Feature | Files | Summary |

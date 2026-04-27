@@ -732,6 +732,28 @@ async function performVisualAudit(
 
       broadcast(`\x1b[32m[VISUAL AUDIT] Success: Screenshot captured.\x1b[0m\r\n`, sessionId, undefined, "journal");
       broadcast(`__VISUAL_SNAPSHOT__:${result.filename}`, sessionId, undefined, "journal");
+
+      // Phase 13.3 — Visual Auditor (vision model grades the rendered design).
+      // Fire-and-forget: never block READY on the LLM call.
+      (async () => {
+        try {
+          const screenshotPath = path.join(projectDir, ".nexus", "snapshots", result.filename);
+          const { auditScreenshot, formatVerdictForJournal } = await import("./visualAuditorService.js");
+          broadcast(`\x1b[36m[VISUAL AUDITOR] Sending screenshot to vision model...\x1b[0m\r\n`, sessionId, undefined, "journal");
+          const verdict = await auditScreenshot(screenshotPath, "(rendered preview review)", undefined, sessionId);
+          if (verdict) {
+            const colour = verdict.score >= 80 ? "\x1b[32m" : verdict.score >= 70 ? "\x1b[36m" : verdict.score >= 50 ? "\x1b[33m" : "\x1b[31m";
+            broadcast(`${colour}${formatVerdictForJournal(verdict)}\x1b[0m\r\n`, sessionId, undefined, "journal");
+            // Structured event for the UI panel to render the full verdict card.
+            broadcast(`__VISUAL_VERDICT__:${JSON.stringify(verdict)}`, sessionId, undefined, "journal");
+          } else {
+            broadcast(`\x1b[33m[VISUAL AUDITOR] Skipped (no Gemini key available or screenshot unreadable).\x1b[0m\r\n`, sessionId, undefined, "journal");
+          }
+        } catch (vErr: any) {
+          broadcast(`\x1b[33m[VISUAL AUDITOR] Error: ${String(vErr?.message || vErr).slice(0, 160)}\x1b[0m\r\n`, sessionId, undefined, "journal");
+        }
+      })();
+
       return;
     } catch (e: any) {
       broadcast(`\x1b[33m[VISUAL AUDIT] Warning: Browser failed (${e.message}). Retrying in 5s...\x1b[0m\r\n`, sessionId, undefined, "journal");
