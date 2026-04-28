@@ -107,14 +107,17 @@ export function intentDirective(intent: Intent): string {
  * Sanitize Nexus's outgoing visible text:
  *   - drop characters from scripts the user didn't write in (Cyrillic, CJK, Hangul,
  *     Devanagari, Greek, Hebrew, Thai) when the user wrote in Arabic or Latin only.
- *   - collapse smart-quote noise.
+ *   - PRESERVE technical Latin tokens (file paths, identifiers, code-style words)
+ *     even in pure-Arabic replies, because those are language-neutral.
  *
  * Markers and code inside [NEXUS:FILE:…] are NOT touched.
  */
 export function sanitizeLanguage(reply: string, userMessage: string): string {
   const userScript = detectScripts(userMessage);
   const allowAr = userScript.has("ar");
-  const allowLatin = userScript.has("latin") || !allowAr; // default to latin if unknown
+  const allowLatin = userScript.has("latin"); // pure Arabic user → Latin is non-conversational
+
+  // Always-forbidden scripts (the user can never have meant these regardless of input language).
   const FORBIDDEN = /[\u0400-\u04FF\u0500-\u052F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF\u0900-\u097F\u0370-\u03FF\u0590-\u05FF\u0E00-\u0E7F]/g;
 
   // Split reply by NEXUS:FILE blocks; only sanitize outside of them.
@@ -126,11 +129,68 @@ export function sanitizeLanguage(reply: string, userMessage: string): string {
       // strip Arabic if user didn't write in Arabic
       p = p.replace(/[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]/g, "");
     }
-    if (!allowLatin) {
-      p = p.replace(/[A-Za-z]/g, "");
+    if (allowAr && !allowLatin) {
+      // Pure-Arabic user — strip Latin words but PRESERVE technical tokens
+      // (file paths, code identifiers, urls, version numbers, brand words).
+      // A "technical token" = run of [A-Za-z0-9._/-]+ that contains at least
+      // one of: '/', '.', '_', '-', or is ALL-CAPS (acronym), or starts with
+      // a digit, or matches a known tech keyword. Everything else is prose
+      // English and gets stripped.
+      const TECH_KEYWORDS = /^(react|vite|tailwind|nexus|api|css|html|js|ts|tsx|jsx|json|node|npm|http|https|url|ui|ux|ai|app|repl|github|google|gemini|gpt|llm|sse|json|xml|sql|db)$/i;
+      p = p.replace(/[A-Za-z][A-Za-z0-9._/\-]*/g, (tok) => {
+        if (/[._/\-]/.test(tok)) return tok;             // path-like
+        if (/^[A-Z]{2,}$/.test(tok)) return tok;         // acronym
+        if (/^[A-Z][a-z]+[A-Z]/.test(tok)) return tok;   // CamelCase identifier
+        if (TECH_KEYWORDS.test(tok)) return tok;         // tech keyword
+        return "";                                        // plain English word — drop
+      });
+      // Collapse the orphan spaces left behind.
+      p = p.replace(/[ \t]{2,}/g, " ").replace(/\s+([،.!؟?])/g, "$1");
     }
     return p;
   }).join("");
+}
+
+/** Detect the dominant conversational language of the user's input. */
+export function detectUserLanguage(s: string): "ar" | "en" {
+  const arChars = (s.match(/[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]/g) || []).length;
+  const latChars = (s.match(/[A-Za-z]/g) || []).length;
+  // If Arabic outnumbers Latin (or no Latin at all), reply in Arabic.
+  if (arChars > 0 && arChars >= latChars) return "ar";
+  return "en";
+}
+
+/**
+ * Build a strong "respond in this language" directive that gets appended
+ * to every system prompt. This is what closes the door on accidental
+ * English replies when the user writes Arabic, and prevents stray Arabic
+ * characters appearing in pure-English answers.
+ */
+export function languageDirective(userMessage: string): string {
+  const lang = detectUserLanguage(userMessage);
+  if (lang === "ar") {
+    return [
+      "━━━ LANGUAGE PROTOCOL ━━━",
+      "The user wrote in ARABIC. You MUST reply in fluent, natural Arabic.",
+      "• Visible text outside markers: Arabic only.",
+      "• Allowed exceptions inside Arabic prose: file paths (src/App.tsx),",
+      "  code identifiers, framework names (React, Vite, Tailwind), URLs,",
+      "  version numbers, acronyms (API, CSS, HTML).",
+      "• NEVER write entire English sentences inside an Arabic reply.",
+      "• NEVER mix Cyrillic/CJK/Hangul/Hebrew characters into the response.",
+      "• Punctuation: prefer Arabic punctuation (، ؛ ؟) where natural.",
+      "• Code, file contents, and marker payloads stay in their native language",
+      "  (TypeScript stays English, etc).",
+    ].join("\n");
+  }
+  return [
+    "━━━ LANGUAGE PROTOCOL ━━━",
+    "The user wrote in ENGLISH. Reply in clear, natural English.",
+    "• Visible text outside markers: English only.",
+    "• NEVER inject Arabic, Cyrillic, CJK, Hangul, Hebrew, Devanagari, Greek,",
+    "  or Thai characters into the response — those are filtered out and",
+    "  produce abnormal-looking output.",
+  ].join("\n");
 }
 
 function detectScripts(s: string): Set<string> {

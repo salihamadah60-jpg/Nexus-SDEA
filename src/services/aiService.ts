@@ -21,7 +21,7 @@ import { scaffoldProject } from "./scaffoldService.js";
 import { runDiagnostics } from "./diagnosticService.js";
 import { requestAuditFix } from "./orchestratorService.js";
 import { keyPool, classifyError, type KeyState, type ProviderName } from "./keyPoolService.js";
-import { classifyIntent, intentDirective, sanitizeLanguage } from "./intentService.js";
+import { classifyIntent, intentDirective, sanitizeLanguage, languageDirective, detectUserLanguage } from "./intentService.js";
 import { compactHistory, recordFiles, recordPort, recordDecision, getFacts, renderFacts } from "./memoryService.js";
 import { eventStream } from "./eventStreamService.js";
 import { nexusLog } from "./logService.js";
@@ -923,10 +923,27 @@ export function createChatHandler(broadcast: (data: string, sid?: string) => voi
     // Intent gating: smalltalk gets a short reply, build gets full protocol.
     const intent = classifyIntent(message);
     const intentLine = intentDirective(intent);
+    const langLine = languageDirective(message);
+    const userLang = detectUserLanguage(message);
     const factsBlock = sessionId ? renderFacts(sessionId) : "";
-    const augmentedSystemPrompt = systemPrompt + `\n\n━━━ INTENT DIRECTIVE ━━━\n${intentLine}\n${factsBlock}`;
 
-    send({ nexus_streaming: true, status: 'Consulting neural engine...', nexus_intent: intent });
+    // Phase 13.6 — Memory of Wins: surface up to 3 past high-scoring patterns
+    // whose intent matches the current request. Gives the model proven
+    // structures to draw on instead of rebuilding from a blank canvas.
+    let winsBlock = "";
+    try {
+      const { lookupRelevantWins, formatWinsForPrompt } = await import("./winsLibraryService.js");
+      const matches = await lookupRelevantWins(message, 3);
+      if (matches.length > 0) winsBlock = "\n\n" + formatWinsForPrompt(matches);
+    } catch {}
+
+    const augmentedSystemPrompt =
+      systemPrompt +
+      `\n\n${langLine}` +
+      `\n\n━━━ INTENT DIRECTIVE ━━━\n${intentLine}\n${factsBlock}` +
+      winsBlock;
+
+    send({ nexus_streaming: true, status: 'Consulting neural engine...', nexus_intent: intent, nexus_lang: userLang });
 
     let fullResponse = '';
     let usedProvider = '';
@@ -963,9 +980,22 @@ export function createChatHandler(broadcast: (data: string, sid?: string) => voi
     const parsed = parseNexusResponse(fullResponse, sessionId, turnNumber);
 
     // Phase 5: Clarification Bridge (Ambiguity Gate)
+    // BUGFIX (Phase 13.5): previous code returned WITHOUT writing [DONE] or
+    // calling res.end(), so the EventSource hung client-side ("thinking
+    // mode forever, then sudden disconnect on TCP timeout"). Now we always
+    // close the SSE stream cleanly on this exit branch.
     if (fullResponse.includes('[NEXUS:CLARIFY]') || (parsed.summary.length < 50 && !parsed.filesToWrite.length)) {
+      const safeSummary = sanitizeLanguage(
+        parsed.summary || (
+          fullResponse.trim().length === 0
+            ? "I couldn't reach an AI provider just now — please try again in a moment, or check the API key panel."
+            : fullResponse.slice(0, 800)
+        ),
+        message
+      );
       send({ nexus_streaming: false });
-      send({ nexus_summary: parsed.summary || "My confidence in the current architectural direction is below the threshold. I require clarification: " + fullResponse.slice(0, 500) });
+      send({ nexus_summary: safeSummary });
+      try { res.write('data: [DONE]\n\n'); res.end(); } catch {}
       return;
     }
 
@@ -1325,11 +1355,24 @@ export function createChatHandler(broadcast: (data: string, sid?: string) => voi
     if (parsed.triggerScreenshot && sessionId) {
       try {
         const { captureVisualSnapshot } = await import('./visualService.js');
-        const previewUrl = `http://localhost:5000/api/preview/${sessionId}/`;
-        const result = await captureVisualSnapshot(sessionId, previewUrl);
-        if (result) {
-          send({ nexus_screenshot: result.filename });
-          broadcast(`__VISUAL_SNAPSHOT__:${result.filename}`, sessionId);
+        // Try the live dev server first; fall back to static preview if it
+        // isn't booted yet so AI-triggered screenshots still produce an image.
+        const candidates = [
+          `http://localhost:5000/api/preview/${sessionId}/`,
+          `http://localhost:5000/sandbox-preview/${sessionId}/index.html`,
+        ];
+        let captured = null;
+        for (const url of candidates) {
+          try {
+            const r = await captureVisualSnapshot(sessionId, url);
+            if (r) { captured = r; break; }
+          } catch {}
+        }
+        if (captured) {
+          send({ nexus_screenshot: captured.filename });
+          broadcast(`__VISUAL_SNAPSHOT__:${captured.filename}`, sessionId);
+        } else {
+          send({ nexus_streaming: true, status: 'Screenshot skipped — preview not reachable yet (dev server still booting?).' });
         }
       } catch {}
     }

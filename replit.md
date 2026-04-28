@@ -1,5 +1,16 @@
 # Nexus AI Sovereign IDE v8.0 — Silent Operator
 
+## Phase 13.6 — Memory of Wins + SSE Stream Fix + Bilingual Hardening (2026-04-28)
+
+| # | Feature | Files | Summary |
+|---|---------|-------|---------|
+| 1 | **Memory of Wins (Design Library)** | `src/services/winsLibraryService.ts` (new), `src/services/autopilotService.ts`, `src/services/aiService.ts` | New `winsLibraryService` persists every Visual-Auditor verdict ≥ 85 to `.nexus/wins.json` (capped at 30 entries by `score + recency` weighting). Each win stores the user goal that produced it, the verdict summary, tokenized tags for jaccard match, and up to 6 file excerpts (path + first 1.5 KB + byte size). The autopilot's self-improvement loop calls `recordWin` immediately after a design clears the 75-threshold, fetching the latest user message from MongoDB to label the intent. Every chat handler now calls `lookupRelevantWins(userGoal, 3)` before building the system prompt and appends matching wins as a `PROVEN PATTERNS — YOUR PAST WINS` block. Result: the model gets concrete reference material from its own ≥85-scoring outputs every time it generates, instead of starting from a blank canvas. |
+| 2 | **SSE early-exit stream-leak fix** | `src/services/aiService.ts` | The Clarification-Bridge branch (line ~973) `return`ed without writing `[DONE]` or calling `res.end()`, leaving the EventSource open until TCP timeout — visible to the user as "thinking forever, then sudden disconnect". This fired most often when all AI providers were rate-limited (empty response → short summary → early-exit). Now the branch always closes the stream cleanly with a real summary (or a graceful "couldn't reach an AI provider" message when the response is empty). |
+| 3 | **Bilingual language directive** | `src/services/intentService.ts`, `src/services/aiService.ts` | Added `detectUserLanguage(msg)` (Arabic vs English by character ratio) and `languageDirective(msg)` which returns a strong "reply in this language" block. The chat handler injects it into the system prompt for EVERY turn (not just smalltalk). The Arabic directive explicitly allows technical Latin tokens (file paths, framework names, acronyms) and forbids Cyrillic/CJK/Hangul/Hebrew injection. |
+| 4 | **Smarter language sanitizer** | `src/services/intentService.ts` (`sanitizeLanguage`) | Previously stripped ALL Latin letters from Arabic replies, which destroyed file paths like `src/App.tsx` mid-sentence. Now preserves "technical tokens" (anything containing `/._-`, ALL-CAPS acronyms, CamelCase identifiers, or known tech keywords) while still removing prose English words from Arabic replies. Punctuation spacing also normalised. |
+| 5 | **Screenshot URL fallback** | `src/services/aiService.ts` (AI-triggered screenshot path) | Previously hit only `/api/preview/<sid>/` (live dev server) and silently returned null when the dev server wasn't booted yet. Now tries the live proxy first, then falls back to the static `/sandbox-preview/<sid>/index.html` route, and emits a clear "preview not reachable yet" status when both fail. |
+| 6 | **Language event in stream** | `src/services/aiService.ts` | Added `nexus_lang: "ar" | "en"` to the per-turn streaming event so the UI can render the chat bubble RTL when needed. |
+
 ## Phase 13.4 — Visual Self-Improvement Loop (2026-04-27)
 
 | # | Feature | Files | Summary |

@@ -779,6 +779,48 @@ async function performVisualAudit(
 
             if (verdict.score >= VISUAL_REVISION_THRESHOLD) {
               broadcast(`\x1b[32m[SELF-IMPROVE] Score ${verdict.score} ≥ ${VISUAL_REVISION_THRESHOLD} — design accepted.\x1b[0m\r\n`, sessionId, undefined, "journal");
+
+              // Phase 13.6 — Memory of Wins: snapshot proven designs ≥ 85.
+              try {
+                const { recordWin, WINS_THRESHOLD } = await import("./winsLibraryService.js");
+                if (verdict.score >= WINS_THRESHOLD) {
+                  // Discover candidate UI files in the sandbox (App, components, index.css)
+                  const filePaths: string[] = [];
+                  for (const rel of ["src/App.tsx", "src/App.jsx", "src/index.css"]) filePaths.push(rel);
+                  try {
+                    const compDir = path.join(projectDir, "src", "components");
+                    const entries = await fs.readdir(compDir);
+                    for (const e of entries) if (/\.(t|j)sx$/.test(e)) filePaths.push(`src/components/${e}`);
+                  } catch {}
+
+                  // Look up the user goal that triggered this build (latest user
+                  // message from the session, best-effort via MongoDB).
+                  let userGoal = "(unknown intent)";
+                  try {
+                    const mongoose = (await import("mongoose")).default;
+                    if (mongoose.connection.readyState === 1) {
+                      const { Session } = await import("../models/Session.js");
+                      const sess = await Session.findOne({ sessionId });
+                      const lastUser = sess?.messages?.slice().reverse().find((m: any) => m.role === "user");
+                      if (lastUser?.content) userGoal = String(lastUser.content).slice(0, 280);
+                    }
+                  } catch {}
+
+                  const win = await recordWin({
+                    sessionId,
+                    projectDir,
+                    score: verdict.score,
+                    summary: verdict.summary,
+                    intent: userGoal,
+                    filePaths,
+                  });
+                  if (win) {
+                    broadcast(`\x1b[32m[MEMORY OF WINS] Saved win #${win.id} (score ${win.score}/100, ${win.files.length} files) — future builds will reference this pattern.\x1b[0m\r\n`, sessionId, undefined, "journal");
+                  }
+                }
+              } catch (winErr: any) {
+                broadcast(`\x1b[33m[MEMORY OF WINS] Snapshot failed: ${String(winErr?.message || winErr).slice(0, 120)}\x1b[0m\r\n`, sessionId, undefined, "journal");
+              }
               return;
             }
 
