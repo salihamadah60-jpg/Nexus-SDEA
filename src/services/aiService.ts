@@ -937,11 +937,22 @@ export function createChatHandler(broadcast: (data: string, sid?: string) => voi
       if (matches.length > 0) winsBlock = "\n\n" + formatWinsForPrompt(matches);
     } catch {}
 
+    // Phase 13.7 — Anti-Patterns: surface up to 2 past failures whose intent
+    // overlaps the current request, so the model knows exactly which broken
+    // patterns to avoid (Module not found, SyntaxError, etc).
+    let antiPatternsBlock = "";
+    try {
+      const { lookupRelevantAntiPatterns, formatAntiPatternsForPrompt } = await import("./antiPatternsLibraryService.js");
+      const aps = await lookupRelevantAntiPatterns(message, 2);
+      if (aps.length > 0) antiPatternsBlock = "\n\n" + formatAntiPatternsForPrompt(aps);
+    } catch {}
+
     const augmentedSystemPrompt =
       systemPrompt +
       `\n\n${langLine}` +
       `\n\n━━━ INTENT DIRECTIVE ━━━\n${intentLine}\n${factsBlock}` +
-      winsBlock;
+      winsBlock +
+      antiPatternsBlock;
 
     send({ nexus_streaming: true, status: 'Consulting neural engine...', nexus_intent: intent, nexus_lang: userLang });
 

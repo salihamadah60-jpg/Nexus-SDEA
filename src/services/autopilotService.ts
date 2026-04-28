@@ -774,6 +774,34 @@ async function performVisualAudit(
       // handlers will kick in and trigger a repair pass. We do NOT broadcast
       // __OPEN_PREVIEW__ in this branch, which is the whole point.
       sessionState.status = "STARTING";
+
+      // Phase 13.7 — Record this failure as an anti-pattern so the AI learns
+      // from its own mistakes. Best-effort; never blocks the autopilot.
+      try {
+        const { recordAntiPattern } = await import("./antiPatternsLibraryService.js");
+        // Pull the most recent user message from MongoDB to label the intent.
+        let intent = "unknown intent";
+        try {
+          const lastMsg = await db.collection("messages")
+            .find({ sessionId })
+            .sort({ createdAt: -1 })
+            .limit(1)
+            .toArray();
+          if (lastMsg[0]?.content) intent = String(lastMsg[0].content).slice(0, 280);
+        } catch {}
+        const ap = await recordAntiPattern({
+          sessionId,
+          projectDir,
+          reason: health.reason || "unknown failure",
+          intent,
+        });
+        if (ap) {
+          broadcast(`\x1b[35m[AUTOPILOT] Anti-pattern recorded — AI will avoid this on future generations.\x1b[0m\r\n`, sessionId, undefined, "journal");
+        }
+      } catch (apErr: any) {
+        // Library write failures are non-fatal — log and move on.
+        broadcast(`\x1b[33m[AUTOPILOT] Anti-pattern recording skipped: ${apErr?.message || apErr}\x1b[0m\r\n`, sessionId, undefined, "journal");
+      }
     } else {
       // ── Probe passed AND body looks healthy: only NOW promote to READY ───
       sessionState.status = "READY";
