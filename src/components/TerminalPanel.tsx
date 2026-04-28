@@ -110,22 +110,26 @@ export function TerminalPanel() {
       <div 
         ref={ref}
         onClick={() => inputRefs.current[tab?.id]?.focus()}
-        className="flex-1 overflow-y-auto p-4 custom-scrollbar text-[12px] leading-relaxed transition-colors font-mono cursor-text"
+        // Phase 13.7 mobile fix: smaller padding + text on phones (was p-4 text-[12px]
+        // which made line-numbers wrap badly on narrow viewports and pushed the input
+        // line behind the chat panel). Bottom padding reserves space so the prompt
+        // never sits under the chat input bar.
+        className="flex-1 overflow-y-auto px-2 py-2 sm:px-4 sm:py-3 pb-[max(env(safe-area-inset-bottom),12px)] custom-scrollbar text-[10px] sm:text-[12px] leading-snug sm:leading-relaxed transition-colors font-mono cursor-text"
         style={{ background: theme.bg, color: theme.text }}
       >
         {tab?.output.map((line: string, i: number) => (
-          <div key={i} className="flex gap-3 min-h-[1.5em] whitespace-pre-wrap">
-            <span className="opacity-20 select-none w-6 shrink-0 text-right font-mono">{i + 1}</span>
+          <div key={i} className="flex gap-1.5 sm:gap-3 min-h-[1.4em] whitespace-pre-wrap">
+            <span className="opacity-20 select-none w-4 sm:w-6 shrink-0 text-right font-mono text-[9px] sm:text-[12px]">{i + 1}</span>
             <span 
-              className="flex-1 break-all"
+              className="flex-1 break-all min-w-0"
               dangerouslySetInnerHTML={{ __html: ansiToHtml(line, terminalTheme as any) }}
             />
           </div>
         ))}
 
-        {/* Input line */}
-        <div className="flex items-center gap-2 mt-1">
-          <span className="shrink-0 font-bold select-none" style={{ color: theme.prompt }}>
+        {/* Input line — sticky on mobile so it never disappears under the chat bar */}
+        <div className="flex items-center gap-2 mt-1 sticky bottom-0 py-1" style={{ background: theme.bg }}>
+          <span className="shrink-0 font-bold select-none text-[10px] sm:text-[12px]" style={{ color: theme.prompt }}>
             {terminalTheme === 'matrix' ? '>' : terminalTheme === 'dracula' ? 'λ' : terminalTheme === 'nord' ? '→' : 'nexus$'}
           </span>
           <input
@@ -134,7 +138,7 @@ export function TerminalPanel() {
             value={inputValues[tab?.id] || ''}
             onChange={(e) => setInputValues(prev => ({ ...prev, [tab?.id]: e.target.value }))}
             onKeyDown={(e) => handleKeyDown(tab?.id, e)}
-            className="flex-1 bg-transparent border-none outline-none font-mono"
+            className="flex-1 bg-transparent border-none outline-none font-mono text-[10px] sm:text-[12px] min-w-0"
             style={{ color: theme.text, caretColor: theme.prompt }}
             autoComplete="off"
             spellCheck={false}

@@ -1,5 +1,14 @@
 # Nexus AI Sovereign IDE v8.0 — Silent Operator
 
+## Phase 13.7 — Stuck-Synthesis Root Cause + Mobile Terminal + Pre-Preview Health Gate (2026-04-28)
+
+| # | Fix | Files | Why |
+|---|-----|-------|-----|
+| 1 | **Vite watch ignore for runtime artifacts** (root cause of "stuck on NEURAL SYNTHESIS") | `vite.config.ts` | The Vite dev server was watching `.nexus/checkpoints/`, `sandbox/`, `.local/`, and `attached_assets/`. Every checkpoint write the autopilot made — and there are MANY during a generation — fired a full HMR page reload of the IDE itself, severing the user's in-flight EventSource. The chat appeared to "freeze on NEURAL SYNTHESIS IN PROGRESS..." until TCP timeout. Now `server.watch.ignored` excludes all four runtime directories. Confirmed in logs: previous boot had 9 reload-spam lines + tsconfig storm; new boot has zero. |
+| 2 | **90-second hard ceiling on the synthesis stage** | `src/services/aiService.ts` | Defense-in-depth: even if a single AI provider hangs (Gemini Flash occasionally stalls), the `Promise.race` against a 90s timeout guarantees the chat stream always resolves with either real content or a clear "providers responding slowly — try again" message. No more silent multi-minute waits. |
+| 3 | **Mobile terminal layout** | `src/components/TerminalPanel.tsx` | Phone screenshots showed the terminal block (#212333 Moonlight bg) overlapping the chat input bar, line numbers wrapping into the content column, and 12px text being uncomfortably large on narrow viewports. Fixes: padding `px-2 py-2` on mobile (was `p-4`), text sized `text-[10px] sm:text-[12px]`, line-number column `w-4 sm:w-6`, gap `gap-1.5 sm:gap-3`, input row sticky-bottom with `pb-[max(env(safe-area-inset-bottom),12px)]` so the prompt never disappears under the chat bar, and `min-w-0` on the content span for proper overflow break. |
+| 4 | **Pre-preview body health scan** (preview opens too early → addressed) | `src/services/autopilotService.ts` | The previous READY gate confirmed only "a process is listening on the port", which Vite satisfies even when the bundler crashed (the body contains an inlined error overlay). New `inspectPreviewHealth()` fetches up to 256 KB of the served body and scans for 8 error markers — `vite-error-overlay`, `[vite] Internal/Pre-transform error`, `Failed to compile`, `SyntaxError`, `Cannot find module`, `Module not found`, `ReferenceError`, `ECONNREFUSED` — plus empty-body detection. The autopilot now broadcasts `__OPEN_PREVIEW__` ONLY after BOTH the HTTP probe passes AND the body is clean. If the body is unhealthy, status reverts to STARTING with a clear "Hold on — fixing the issue before opening the preview" message in the journal, and the preview stays closed until self-healing completes. |
+
 ## Phase 13.6 — Memory of Wins + SSE Stream Fix + Bilingual Hardening (2026-04-28)
 
 | # | Feature | Files | Summary |

@@ -18,6 +18,22 @@ export default defineConfig({
     port: 5173,
     allowedHosts: true,
     hmr: process.env.DISABLE_HMR !== 'true',
+    // Phase 13.7: Prevent Nexus's own runtime artifacts from triggering full page
+    // reloads that kill in-flight SSE chat connections. Without this, every
+    // checkpoint write / sandbox file change forces an HMR reload of the IDE
+    // itself — the user sees "NEURAL SYNTHESIS IN PROGRESS..." stuck forever
+    // because the EventSource was severed mid-stream.
+    watch: {
+      ignored: [
+        '**/.nexus/**',
+        '**/sandbox/**',
+        '**/attached_assets/**',
+        '**/.local/**',
+        '**/node_modules/**',
+        '**/.git/**',
+        '**/dist/**',
+      ],
+    },
     proxy: {
       '/api': {
         // Fix 7: server.ts runs on port 5000, not 3000

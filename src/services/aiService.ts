@@ -960,15 +960,30 @@ export function createChatHandler(broadcast: (data: string, sid?: string) => voi
       }, 3000);
 
       try {
-        const result = await streamToBuffer(
-          providers, startIndex, augmentedSystemPrompt, history, message,
-          (chars) => send({ nexus_streaming: true, status: `Synthesizing... (${chars} chars)` })
-        );
+        // Phase 13.7 — Hard ceiling on the synthesis stage so a hanging provider
+        // can never lock the chat into "NEURAL SYNTHESIS IN PROGRESS..." for
+        // minutes. 90 s covers the slowest legitimate Gemini Flash response
+        // (~30 s) with comfortable margin; anything beyond that is a stall.
+        const SYNTHESIS_HARD_TIMEOUT_MS = 90_000;
+        const result = await Promise.race([
+          streamToBuffer(
+            providers, startIndex, augmentedSystemPrompt, history, message,
+            (chars) => send({ nexus_streaming: true, status: `Synthesizing... (${chars} chars)` })
+          ),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('SYNTHESIS_TIMEOUT')), SYNTHESIS_HARD_TIMEOUT_MS)
+          ),
+        ]);
         fullResponse = result.fullResponse;
         usedProvider = result.usedProvider;
         if (result.usedKeyId) send({ nexus_used_key: result.usedKeyId });
       } catch (err: any) {
-        fullResponse = 'Neural synthesis failed. Please try again.';
+        if (err?.message === 'SYNTHESIS_TIMEOUT') {
+          fullResponse = "The AI providers are responding slowly right now. I stopped waiting after 90 seconds — please try again, or check the API key panel if this keeps happening.";
+          send({ nexus_streaming: true, status: 'Synthesis timed out — closing stream.' });
+        } else {
+          fullResponse = 'Neural synthesis failed. Please try again.';
+        }
       } finally {
         if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
       }

@@ -30,6 +30,58 @@ async function verifyPreviewReady(url: string, attempts: number, intervalMs: num
   return false;
 }
 
+/**
+ * Phase 13.7 — Health-scan the served HTML/JS body for compile errors BEFORE
+ * the preview is opened to the user. The HTTP probe only confirms a process is
+ * listening — it cannot tell you the dev server is serving an error overlay
+ * (Vite serves a 200 with the error inlined). This catches that case.
+ *
+ * Returns {ok: true} if no error markers are detected, {ok: false, reason}
+ * with a human-readable explanation otherwise.
+ */
+async function inspectPreviewHealth(url: string): Promise<{ ok: boolean; reason?: string }> {
+  return new Promise(resolve => {
+    try {
+      const req = http.get(url, { timeout: 4000 }, res => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => {
+          body += chunk;
+          // Cap at 256 KB — we only need the head to find error markers
+          if (body.length > 256 * 1024) {
+            req.destroy();
+            resolve(scanBodyForErrors(body));
+          }
+        });
+        res.on('end', () => resolve(scanBodyForErrors(body)));
+      });
+      req.on('error', (e) => resolve({ ok: false, reason: `Request error: ${e.message}` }));
+      req.on('timeout', () => { req.destroy(); resolve({ ok: false, reason: 'Body fetch timed out' }); });
+    } catch (e: any) {
+      resolve({ ok: false, reason: e?.message || 'unknown error' });
+    }
+  });
+}
+
+function scanBodyForErrors(body: string): { ok: boolean; reason?: string } {
+  const markers: Array<{ pattern: RegExp; label: string }> = [
+    { pattern: /vite-error-overlay/i,                 label: 'Vite error overlay detected' },
+    { pattern: /\[vite\]\s+(?:Internal|Pre-transform)\s+error/i, label: 'Vite reported an internal error' },
+    { pattern: /Failed to compile/i,                  label: 'Compilation failed' },
+    { pattern: /SyntaxError:/,                        label: 'Syntax error in source' },
+    { pattern: /Cannot find module/i,                 label: 'Missing module import' },
+    { pattern: /Module not found/i,                   label: 'Module not found' },
+    { pattern: /ReferenceError:/,                     label: 'Reference error in source' },
+    { pattern: /\bECONNREFUSED\b/,                    label: 'Connection refused by upstream' },
+  ];
+  for (const m of markers) {
+    if (m.pattern.test(body)) return { ok: false, reason: m.label };
+  }
+  // A truly empty body from a dev server usually means the bundler crashed silently
+  if (body.trim().length === 0) return { ok: false, reason: 'Empty response body' };
+  return { ok: true };
+}
+
 export type SessionStatus = "IDLE" | "INSTALLING" | "STARTING" | "READY" | "ERROR";
 
 interface SessionProcess {
@@ -707,12 +759,29 @@ async function performVisualAudit(
     }
     // Fall through to visual audit attempt regardless
   } else {
-    // ── Probe passed: only NOW promote to READY ────────────────────────────
-    sessionState.status = "READY";
-    sessionState.startAttempts = 0;
-    broadcast(`__REFRESH_PREVIEW__`, sessionId, undefined, "journal");
-    broadcast(`__OPEN_PREVIEW__`, sessionId, undefined, "journal");
-    broadcast(`\x1b[32m[AUTOPILOT] Preview verified at ${targetUrl} — opening.\x1b[0m\r\n`, sessionId, undefined, "journal");
+    // ── Phase 13.7: HEALTH SCAN before opening — the HTTP probe only confirms
+    //    that something is listening, not that it's serving valid output. Vite
+    //    serves a 200 even when the bundler crashed (the body contains the
+    //    error overlay). We scan the body for those markers and only open
+    //    the preview when it's genuinely healthy.
+    broadcast(`\x1b[36m[AUTOPILOT] Pre-flight health scan on ${targetUrl}...\x1b[0m\r\n`, sessionId, undefined, "journal");
+    const health = await inspectPreviewHealth(targetUrl);
+    if (!health.ok) {
+      // Compile error or crash detected — surface to the user, do NOT open the preview
+      broadcast(`\x1b[31m[AUTOPILOT] Preview NOT opened — health scan failed: ${health.reason}\x1b[0m\r\n`, sessionId, undefined, "journal");
+      broadcast(`\x1b[33m[AUTOPILOT] Hold on — fixing the issue before opening the preview...\x1b[0m\r\n`, sessionId, undefined, "journal");
+      // Status stays STARTING — the existing self-healing / dev-server-close
+      // handlers will kick in and trigger a repair pass. We do NOT broadcast
+      // __OPEN_PREVIEW__ in this branch, which is the whole point.
+      sessionState.status = "STARTING";
+    } else {
+      // ── Probe passed AND body looks healthy: only NOW promote to READY ───
+      sessionState.status = "READY";
+      sessionState.startAttempts = 0;
+      broadcast(`__REFRESH_PREVIEW__`, sessionId, undefined, "journal");
+      broadcast(`__OPEN_PREVIEW__`, sessionId, undefined, "journal");
+      broadcast(`\x1b[32m[AUTOPILOT] Preview verified + healthy at ${targetUrl} — opening.\x1b[0m\r\n`, sessionId, undefined, "journal");
+    }
   }
 
   // Fix 5: Reduced from 10 to 3 audit attempts, and bail immediately if no browser found.
