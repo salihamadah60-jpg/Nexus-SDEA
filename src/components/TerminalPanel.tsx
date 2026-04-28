@@ -213,17 +213,21 @@ export function TerminalPanel() {
                 <Palette size={14} />
               </button>
 
-              {/* Desktop dropdown (≥ sm). Anchored ABOVE the palette button. */}
+              {/* Desktop dropdown (≥ sm). Phase 13.15 fix: anchored DOWN
+                  into the terminal area (was bottom-full / above the
+                  palette which overlapped the chat panel sitting above
+                  the terminal). Selecting a theme dismisses the menu, so
+                  briefly covering some terminal output is harmless. */}
               <AnimatePresence>
                 {themeMenuOpen && (
                   <motion.div
                     key="desktop-theme-menu"
-                    initial={{ opacity: 0, y: 4, scale: 0.97 }}
+                    initial={{ opacity: 0, y: -4, scale: 0.97 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, y: 4, scale: 0.97 }}
+                    exit={{ opacity: 0, y: -4, scale: 0.97 }}
                     transition={{ duration: 0.12 }}
                     role="menu"
-                    className="hidden sm:flex absolute right-0 bottom-full mb-1.5 flex-col bg-bg-surface/98 backdrop-blur-xl border border-nexus-border rounded-xl p-1 shadow-2xl z-[2000] min-w-[180px] max-h-[60vh] overflow-y-auto custom-scrollbar"
+                    className="hidden sm:flex absolute right-0 top-full mt-1.5 flex-col bg-bg-surface/98 backdrop-blur-xl border border-nexus-border rounded-xl p-1 shadow-2xl z-[2000] min-w-[180px] max-h-[60vh] overflow-y-auto custom-scrollbar"
                   >
                     {(Object.entries(THEMES_CONFIG) as [keyof typeof THEMES_CONFIG, any][]).map(([key, th]) => (
                       <button

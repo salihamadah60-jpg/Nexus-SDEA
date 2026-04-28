@@ -440,6 +440,7 @@ first key, leaving missing providers invisible). This banner stays.
 | 13.12 Truncated NEXUS sentinel sanitization | — | Small | ✅ |
 | 13.13 Live Preview proxy fix (prefix-strip + asset interceptor) | — | Medium | ✅ |
 | 13.14 Auto-pause toggle + persist UI prefs (theme/model/mode/lang) | 13.9 | Small | ✅ |
+| 13.15 Chat SSE hardening (no-buffer + watchdog) + Terminal theme drops down | — | Medium | ✅ |
 
 Steps 13.3, 13.5, 13.6 can be parallelised once 13.1 is done.
 13.7 is a polish pass on top of 13.1.
@@ -457,6 +458,17 @@ Steps 13.3, 13.5, 13.6 can be parallelised once 13.1 is done.
 
 Resolved: UI theme + Terminal theme + default model/mode/language all
 survive page reloads. Settings no longer feels broken on revisit.
+
+### Phase 13.15 — SSE Hardening + Terminal Theme Direction
+
+| File | Change |
+|------|--------|
+| `src/services/aiService.ts` (chat handler) | Add `X-Accel-Buffering: no` + `flushHeaders()` so Replit's reverse proxy stops buffering events; emit immediate `: nexus-stream-open` heartbeat; emit `: keepalive` comment every 15 s; wrap entire handler in a top-level try/catch/finally that always closes the stream with `[DONE]` even on uncaught throws; hard 5-minute request ceiling that always sends a friendly summary + `[DONE]` instead of leaving the chat spinning. Early-return paths now also tear down the watchdog timers cleanly. |
+| `src/components/TerminalPanel.tsx` | Desktop terminal-theme dropdown anchored `top-full mt-1.5` (drops DOWN into the terminal area) instead of `bottom-full mb-1.5` (which used to overlap the chat panel above the terminal). Selecting a theme dismisses the menu, so briefly covering some terminal output is harmless. |
+
+Resolved: chat no longer hangs on "NEURAL SYNTHESIS IN PROGRESS…" forever
+after a long build; terminal theme picker no longer overlaps the chat
+panel sitting above the terminal.
 
 ### Phase 13.9 — Budget Guardrails
 

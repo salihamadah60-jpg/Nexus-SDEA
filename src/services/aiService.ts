@@ -839,13 +839,67 @@ export function createChatHandler(broadcast: (data: string, sid?: string) => voi
 
     const taskId = generateTaskId();
 
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
+    // Phase 13.15 — SSE hardening: disable upstream proxy buffering so each
+    // event reaches the browser immediately (Replit's reverse proxy
+    // otherwise holds the stream until the response ends, which made the
+    // chat sit on "NEURAL SYNTHESIS IN PROGRESS..." for the full request
+    // duration). flushHeaders() pushes the response status + headers out the
+    // door before the first body byte so the proxy commits to streaming.
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    try { res.flushHeaders?.(); } catch {}
 
+    let streamClosed = false;
     const send = (data: any) => {
+      if (streamClosed) return;
       try { res.write(`data: ${JSON.stringify({ ...data, taskId })}\n\n`); } catch {}
     };
+
+    // Initial heartbeat — proves to the client (and any proxy) that the
+    // stream is alive before any heavy work starts.
+    try { res.write(': nexus-stream-open\n\n'); } catch {}
+
+    // Keepalive comments every 15 s prevent intermediate proxies from
+    // killing an idle connection during long synthesis runs.
+    const keepAlive = setInterval(() => {
+      if (streamClosed) return;
+      try { res.write(': keepalive\n\n'); } catch {}
+    }, 15_000);
+
+    // Phase 13.15 — Hard ceiling on the WHOLE request. Anything beyond
+    // 5 minutes is a hung downstream service (visual audit, npm install,
+    // screenshot probe). We always close the SSE cleanly so the chat UI
+    // stops spinning, instead of waiting for the TCP socket to die.
+    const REQUEST_HARD_CEILING_MS = 5 * 60 * 1000;
+    let timedOut = false;
+    const requestTimer = setTimeout(() => {
+      if (streamClosed) return;
+      timedOut = true;
+      try {
+        send({ nexus_streaming: false });
+        send({ nexus_summary: 'I had to stop after 5 minutes — a downstream step (preview boot, dependency install, or screenshot capture) is taking too long. Your files were saved if any were written; please try again or check the server logs.' });
+        res.write('data: [DONE]\n\n');
+      } catch {}
+      streamClosed = true;
+      clearInterval(keepAlive);
+      try { res.end(); } catch {}
+    }, REQUEST_HARD_CEILING_MS);
+
+    // Always tear down timers no matter how the response ends.
+    const cleanup = () => {
+      streamClosed = true;
+      clearTimeout(requestTimer);
+      clearInterval(keepAlive);
+    };
+    res.on('close', cleanup);
+    res.on('finish', cleanup);
+
+    // Note: the safety-net try/catch wraps everything below so that an
+    // uncaught throw in the long post-synthesis pipeline can never leave
+    // the chat UI spinning forever. Original logic is unchanged inside.
+    try {
 
     await logHistory({
       taskId,
@@ -890,8 +944,12 @@ export function createChatHandler(broadcast: (data: string, sid?: string) => voi
     if (availableCount === 0) {
       send({ nexus_streaming: false });
       send({ nexus_summary: 'No AI providers configured. Please set at least one API key (GEMINI_API_KEY recommended) in your environment variables.' });
-      res.write('data: [DONE]\n\n');
-      return res.end();
+      try { res.write('data: [DONE]\n\n'); } catch {}
+      streamClosed = true;
+      clearTimeout(requestTimer);
+      clearInterval(keepAlive);
+      try { res.end(); } catch {}
+      return;
     }
 
     let blueprintData = '';
@@ -1021,7 +1079,11 @@ export function createChatHandler(broadcast: (data: string, sid?: string) => voi
       );
       send({ nexus_streaming: false });
       send({ nexus_summary: safeSummary });
-      try { res.write('data: [DONE]\n\n'); res.end(); } catch {}
+      try { res.write('data: [DONE]\n\n'); } catch {}
+      streamClosed = true;
+      clearTimeout(requestTimer);
+      clearInterval(keepAlive);
+      try { res.end(); } catch {}
       return;
     }
 
@@ -1488,7 +1550,33 @@ export function createChatHandler(broadcast: (data: string, sid?: string) => voi
       });
     }
 
-    res.write('data: [DONE]\n\n');
-    res.end();
+    if (!streamClosed) {
+      try { res.write('data: [DONE]\n\n'); } catch {}
+      streamClosed = true;
+      clearTimeout(requestTimer);
+      clearInterval(keepAlive);
+      try { res.end(); } catch {}
+    }
+    } catch (fatalErr: any) {
+      // Phase 13.15 — top-level safety net: any uncaught error in the long
+      // post-synthesis pipeline used to leave the SSE stream open forever,
+      // pinning the chat UI on "NEURAL SYNTHESIS IN PROGRESS...". We now
+      // always close the stream with a friendly message.
+      console.error('[NEXUS-CHAT] Uncaught pipeline error:', fatalErr?.stack || fatalErr?.message);
+      if (!streamClosed) {
+        try {
+          send({ nexus_streaming: false });
+          send({ nexus_summary: `I hit an internal error mid-build (${fatalErr?.message || 'unknown'}). Any files written before the error were saved — try the prompt again.` });
+          res.write('data: [DONE]\n\n');
+        } catch {}
+        streamClosed = true;
+        clearTimeout(requestTimer);
+        clearInterval(keepAlive);
+        try { res.end(); } catch {}
+      }
+    } finally {
+      clearTimeout(requestTimer);
+      clearInterval(keepAlive);
+    }
   };
 }
